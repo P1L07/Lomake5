@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Redirecting...</title>
+  <script>
+    // Redirect to the main app with the same path and query parameters
+    const path = window.location.pathname.replace(/^\/Lomake5/, '');
+    const url = new URL('/Lomake5/', window.location.origin);
+    url.hash = path + window.location.search;
+    window.location.replace(url.toString());
+  </script>
+</head>
+<body>
+  <p>Redirecting to app...</p>
+</body>
+</html>
