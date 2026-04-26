@@ -3,6 +3,8 @@
   max-width: 900px;
   margin: 0 auto;
   padding: 20px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 h1, h2 {
@@ -28,11 +30,10 @@ h1, h2 {
 
 .form-grid {
   display: grid;
-  grid-template-columns: 1fr; /* Mobile default: 1 column */
+  grid-template-columns: 1fr;
   gap: 16px;
 }
 
-/* Tablet & Desktop: 2 columns */
 @media (min-width: 600px) {
   .form-grid {
     grid-template-columns: 1fr 1fr;
@@ -43,6 +44,7 @@ h1, h2 {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: 100%;
 }
 
 .input-group label {
@@ -61,6 +63,9 @@ input, select, textarea {
   outline: none;
   transition: border-color 0.2s;
   font-family: inherit;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 input:focus, select:focus, textarea:focus {
@@ -69,7 +74,7 @@ input:focus, select:focus, textarea:focus {
 }
 
 .submit-btn {
-  grid-column: 1 / -1; /* Spans across all columns */
+  grid-column: 1 / -1;
   padding: 12px;
   background-color: var(--primary-blue);
   color: #ffffff;
@@ -95,11 +100,70 @@ input:focus, select:focus, textarea:focus {
 
 /* Table Styles */
 .table-container {
-  overflow-x: auto; /* Allows swiping on mobile */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   background-color: var(--bg-surface);
   border-radius: 12px;
   border: 1px solid var(--border-color);
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+
+/* Desktop: allow table to expand without forced scroll */
+@media (min-width: 769px) {
+  .table-container {
+    overflow-x: visible;
+  }
+
+  .transactions-table {
+    table-layout: auto;
+    min-width: 100%;
+  }
+
+  /* Remove fixed min-widths on desktop; let columns size naturally */
+  .transactions-table th,
+  .transactions-table td {
+    min-width: auto;
+    white-space: nowrap;
+  }
+
+  /* Action buttons row layout */
+  .action-cell {
+    flex-wrap: nowrap;
+  }
+}
+
+/* Mobile: keep scrollable table */
+@media (max-width: 768px) {
+  .table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .transactions-table {
+    table-layout: fixed;
+    min-width: 600px;  /* Forces horizontal scroll when needed */
+    font-size: 0.75rem;
+  }
+
+  .transactions-table th,
+  .transactions-table td {
+    white-space: normal;
+    word-break: break-word;
+    padding: 8px 4px;
+  }
+
+  .action-cell {
+    gap: 4px;
+  }
+
+  .action-cell button {
+    padding: 4px 8px;
+    font-size: 0.7rem;
+    min-height: 28px;
+  }
 }
 
 .transactions-table {
@@ -107,6 +171,7 @@ input:focus, select:focus, textarea:focus {
   border-collapse: collapse;
   text-align: left;
   font-size: 0.9rem;
+  table-layout: auto;
 }
 
 .transactions-table th {
@@ -122,7 +187,8 @@ input:focus, select:focus, textarea:focus {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-main);
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .transactions-table tr:last-child td {
@@ -133,9 +199,27 @@ input:focus, select:focus, textarea:focus {
   background-color: var(--bg-main);
 }
 
+/* Column widths (desktop) */
+.transactions-table th:nth-child(1),
+.transactions-table td:nth-child(1) { min-width: 90px; }
+.transactions-table th:nth-child(2),
+.transactions-table td:nth-child(2) { min-width: 70px; }
+.transactions-table th:nth-child(3),
+.transactions-table td:nth-child(3) { min-width: 120px; max-width: 200px; }
+.transactions-table th:nth-child(4),
+.transactions-table td:nth-child(4) { min-width: 100px; }
+.transactions-table th:nth-child(5),
+.transactions-table td:nth-child(5) { min-width: 100px; }
+.transactions-table th:nth-child(6),
+.transactions-table td:nth-child(6) { min-width: 180px; }
+
 .badge {
   display: inline-block;
-  padding: 6px 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
   min-width: 60px;
   text-align: center;
   cursor: pointer;
@@ -146,17 +230,40 @@ input:focus, select:focus, textarea:focus {
 .badge.paid { background-color: rgba(16, 185, 129, 0.1); color: var(--success); }
 .badge.unpaid { background-color: rgba(245, 158, 11, 0.1); color: #d97706; }
 
-/* Delete Button Styles */
+/* Action Buttons */
+.action-cell {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.action-cell button {
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  min-height: 32px;
+  flex: 0 0 auto;
+}
+
+.edit-btn {
+  background-color: transparent;
+  color: var(--primary-blue);
+  border: 1px solid var(--primary-blue);
+}
+
+.edit-btn:hover {
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
 .delete-btn {
   background-color: transparent;
   color: var(--text-muted);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
 }
 
 .delete-btn:hover {
@@ -165,25 +272,13 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--danger);
 }
 
-/* --- Edit & Action Buttons --- */
-.action-cell {
-  display: flex;
-  gap: 8px;
-}
-
-.edit-btn {
+.view-btn {
   background-color: transparent;
   color: var(--primary-blue);
   border: 1px solid var(--primary-blue);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
 }
 
-.edit-btn:hover {
+.view-btn:hover {
   background-color: rgba(59, 130, 246, 0.1);
 }
 
@@ -208,22 +303,32 @@ input:focus, select:focus, textarea:focus {
 /* Tab Navigation */
 .tabs {
   display: flex;
-  gap: 10px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 6px;
   margin-bottom: 24px;
   border-bottom: 2px solid var(--border-color);
   padding-bottom: 10px;
 }
 
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
 .tab-btn {
   background: none;
   border: none;
-  padding: 10px 20px;
-  font-size: 1.1rem;
+  padding: 10px 16px;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-muted);
   cursor: pointer;
   border-radius: 8px 8px 0 0;
   transition: all 0.2s;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .tab-btn:hover {
@@ -234,10 +339,10 @@ input:focus, select:focus, textarea:focus {
 .tab-btn.active {
   color: var(--primary-blue);
   border-bottom: 3px solid var(--primary-blue);
-  margin-bottom: -12px; /* Pulls the border down to overlap the container line */
+  margin-bottom: -12px;
 }
 
-/* --- Reports Dashboard Styles --- */
+/* Reports Dashboard */
 .report-controls {
   display: flex;
   gap: 16px;
@@ -247,6 +352,7 @@ input:focus, select:focus, textarea:focus {
   border-radius: 12px;
   border: 1px solid var(--border-color);
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .report-grid {
@@ -326,7 +432,7 @@ input:focus, select:focus, textarea:focus {
   font-size: 1rem;
 }
 
-/* --- Receipt Scanner --- */
+/* Receipt Scanner */
 .scan-btn {
   background-color: var(--bg-main);
   color: var(--text-main);
@@ -342,6 +448,7 @@ input:focus, select:focus, textarea:focus {
   justify-content: center;
   align-items: center;
   gap: 10px;
+  min-height: 50px;
 }
 
 .scan-btn:hover {
@@ -352,7 +459,7 @@ input:focus, select:focus, textarea:focus {
   display: none;
 }
 
-/* Modal overlay */
+/* Modal */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -382,7 +489,7 @@ input:focus, select:focus, textarea:focus {
   color: var(--text-main);
 }
 
-/* --- Authentication Styles --- */
+/* Authentication */
 .auth-container {
   display: flex;
   flex-direction: column;
@@ -417,47 +524,28 @@ input:focus, select:focus, textarea:focus {
   font-size: 1rem;
 }
 
-.auth-toggle {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 24px;
-  background-color: var(--bg-main);
-  padding: 4px;
-  border-radius: 12px;
+.auth-card .submit-btn {
+  width: 100%;
+  margin-top: 20px;
+  grid-column: auto;
 }
 
-.auth-toggle button {
-  flex: 1;
-  padding: 10px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-weight: 600;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
+/* Loading Spinner */
+.spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--primary-blue);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
-.auth-toggle button.active {
-  background-color: var(--primary-blue);
-  color: white;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
-.auth-form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.auth-form .input-group {
-  text-align: left;
-}
-
-.auth-form .submit-btn {
-  margin-top: 8px;
-}
-
-/* --- Header Bar (Logged In) --- */
+/* Header */
 .app-header {
   display: flex;
   justify-content: space-between;
@@ -483,6 +571,10 @@ input:focus, select:focus, textarea:focus {
 .user-email {
   font-size: 0.9rem;
   color: var(--text-muted);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sign-out-btn {
@@ -503,144 +595,72 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--danger);
 }
 
-/* --- Tabs Adjustments --- */
-.tabs {
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.tab-btn {
-  padding: 10px 16px;
-  font-size: 1rem;
-}
-
-@media (max-width: 600px) {
-  .app-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-  }
-  
-  .tab-btn {
-    padding: 8px 12px;
-    font-size: 0.9rem;
-  }
-}
-
-/* --- General Polish --- */
+/* General */
 button {
   cursor: pointer;
-}
-
-.table-container {
-  margin-top: 24px;
+  min-height: 44px;
+  touch-action: manipulation;
 }
 
 .form-card h2 {
   margin-top: 0;
 }
 
-/* --- Auth Button Centering --- */
-.auth-card .submit-btn {
-  width: 100%;
-  margin-top: 20px;
-  grid-column: auto; /* Override the default grid-column */
-}
+/* Mobile Optimizations */
+@media (max-width: 600px) {
+  .app-container {
+    padding: 12px;
+  }
 
-/* --- Mobile Optimizations --- */
-
-/* Ensure all containers respect screen width */
-.app-container {
-  width: 100%;
-  padding: 12px;
-  box-sizing: border-box;
-}
-
-/* Tabs: allow horizontal scroll on very small screens */
-.tabs {
-  display: flex;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none; /* Firefox */
-  gap: 6px;
-  padding-bottom: 8px;
-  margin-bottom: 16px;
-}
-
-.tabs::-webkit-scrollbar {
-  display: none; /* Chrome/Safari */
-}
-
-.tab-btn {
-  flex-shrink: 0;
-  padding: 10px 14px;
-  font-size: 0.95rem;
-  white-space: nowrap;
-}
-
-/* Form cards: reduce padding on mobile */
-@media (max-width: 480px) {
   .form-card {
     padding: 16px;
   }
 
   .form-grid {
     gap: 12px;
-  }
-
-  /* Stack all form inputs on mobile */
-  .form-grid {
     grid-template-columns: 1fr !important;
   }
 
-  /* Buttons: full width on mobile */
   .submit-btn,
   .cancel-btn {
     width: 100%;
   }
 
-  /* Make inputs easier to tap */
   input, select, textarea, button {
-    font-size: 16px !important; /* Prevents iOS zoom on focus */
-    padding: 12px 14px;
+    font-size: 16px !important;
   }
 
-  /* Table font size slightly smaller but still readable */
   .transactions-table {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
+    table-layout: fixed;
+    min-width: 600px;
   }
 
   .transactions-table th,
   .transactions-table td {
-    padding: 10px 8px;
-    white-space: nowrap;
+    padding: 8px 4px;
   }
 
-  /* Action buttons in table: stack if needed */
   .action-cell {
-    flex-direction: column;
     gap: 4px;
   }
 
-  .edit-btn, .delete-btn {
-    padding: 6px 8px;
+  .action-cell button {
+    padding: 4px 8px;
     font-size: 0.7rem;
+    min-height: 28px;
   }
 
-  /* Reports controls: stack vertically */
   .report-controls {
     flex-direction: column;
     align-items: stretch;
   }
 
-  /* Modal: full width with slight margin */
   .modal-content {
     padding: 16px;
     width: 95%;
   }
 
-  /* Header: adjust for small screens */
   .app-header {
     flex-direction: column;
     align-items: flex-start;
@@ -656,78 +676,15 @@ button {
     justify-content: space-between;
   }
 
-  /* Ensure all inputs and their containers respect screen width */
-    .input-group {
-    width: 100%;
-    }
-
-    input, select, textarea {
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-    }
-
-    /* Prevent any fixed-width elements from overflowing */
-    .form-card,
-    .app-container,
-    .table-container {
-    max-width: 100%;
-    overflow-x: hidden;
-    }
-
-    /* Table container allows horizontal scroll only for table content */
-    .table-container {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    }
-
-    /* Ensure flex children don't overflow */
-    div[style*="display: flex"] {
-    flex-wrap: wrap;
-    max-width: 100%;
-    }
-}
-
-/* Ensure tables don't overflow parent */
-.table-container {
-  width: 100%;
-  margin-top: 16px;
-  margin-bottom: 16px;
-}
-
-/* Fix for long email addresses in header */
-.user-email {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Button consistency */
-button {
-  min-height: 44px; /* Apple's recommended touch target */
-  touch-action: manipulation;
-}
-
-/* Scan button specific */
-.scan-btn {
-  min-height: 50px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* Fix for "Lisää uusi asiakas" button alignment */
-@media (max-width: 600px) {
   .input-group > div[style*="display: flex"] {
     flex-wrap: wrap;
   }
-  
+
   .input-group > div[style*="display: flex"] > select {
     flex-basis: 100%;
     margin-bottom: 8px;
   }
-  
+
   .input-group > div[style*="display: flex"] > button {
     width: 100%;
   }

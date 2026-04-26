@@ -5,7 +5,6 @@ import autoTable from 'jspdf-autotable'
 import './App.css'
 import Tesseract from 'tesseract.js'
 import * as pdfjsLib from 'pdfjs-dist'
-
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 
@@ -28,6 +27,7 @@ const DEFAULT_SETTINGS = {
 const DEFAULT_INVOICE_DATA = {
   buyer_name: '',
   buyer_address: '',
+  buyer_email: '',
   invoice_number: '1',
   reference_number: '',
   project_details: '',
@@ -78,10 +78,16 @@ function App() {
 
   // --- SETTINGS (loaded from DB) ---
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [isSettingsSaving, setIsSettingsSaving] = useState(false)
+
 
   // --- INVOICE FORM STATE ---
   const [invoiceData, setInvoiceData] = useState(DEFAULT_INVOICE_DATA);
   const [showCustomerModal, setShowCustomerModal] = useState(false)
+  const [isInvoiceLoading, setIsInvoiceLoading] = useState(false)
+  const [lastInvoiceUrl, setLastInvoiceUrl] = useState('')
+  const [lastInvoiceNumber, setLastInvoiceNumber] = useState('')
+  const [invoiceViewed, setInvoiceViewed] = useState(false)
   const [newCustomer, setNewCustomer] = useState({
     name: '',
     address: '',
@@ -90,6 +96,17 @@ function App() {
     phone: '',
     reference_number: ''
   })
+
+  const isInvoiceFormValid = useMemo(() => {
+  return (
+    invoiceData.invoice_number.toString().trim() !== '' &&
+    invoiceData.description.trim() !== '' &&
+    parseFloat(invoiceData.quantity) > 0 &&
+    parseFloat(invoiceData.unit_price) > 0 &&
+    invoiceData.income_category !== '' &&
+    invoiceData.selectedCustomerId !== ''
+  )
+}, [invoiceData])
 
   // --- LEDGER FORM STATE ---
   const [formData, setFormData] = useState({
@@ -233,6 +250,18 @@ function App() {
       .select('*')
       .order('date_issued', { ascending: false })
     if (data) setTransactions(data)
+  }
+
+  const resetInvoiceForm = (nextInvoiceNumber) => {
+    setInvoiceData({
+      ...DEFAULT_INVOICE_DATA,
+      invoice_number: nextInvoiceNumber.toString(),
+      date_issued: new Date().toISOString().split('T')[0],
+    })
+    // Also clear the success card and 'viewed' flag
+    setLastInvoiceUrl('')
+    setLastInvoiceNumber('')
+    setInvoiceViewed(false)
   }
 
   // =============================================
@@ -515,7 +544,7 @@ function App() {
     }
 
     if (!dbError) {
-      setStatusMessage('Success!')
+      setStatusMessage('VALMIS!')
       cancelEdit()
       fetchTransactions()
     } else {
@@ -556,13 +585,73 @@ function App() {
 
   const handleDelete = async (id) => {
     if (!window.confirm("Poistetaanko tapahtuma?")) return
-    const { error } = await supabase.from('transactions').delete().eq('id', id)
-    if (!error) fetchTransactions()
+
+    // First, fetch the transaction to get the file URL
+    const { data: transaction, error: fetchError } = await supabase
+      .from('transactions')
+      .select('receipt_image_url, invoice_pdf_url')
+      .eq('id', id)
+      .single()
+
+    if (fetchError) {
+      alert('Virhe haettaessa tietoja: ' + fetchError.message)
+      return
+    }
+
+    // Delete the transaction record
+    const { error: deleteError } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', id)
+
+    if (deleteError) {
+      alert('Virhe poistettaessa: ' + deleteError.message)
+      return
+    }
+
+    // If there's an associated file, delete it from storage
+    const fileUrl = transaction?.receipt_image_url || transaction?.invoice_pdf_url
+    if (fileUrl) {
+      try {
+        // Determine bucket and extract file path (handles both public and signed URLs)
+        let bucket = ''
+        let path = ''
+        
+        if (fileUrl.includes('/receipts/')) {
+          bucket = 'receipts'
+          // Match everything after /receipts/ up to ? or end of string
+          const match = fileUrl.match(/\/receipts\/([^?]+)/)
+          if (match) path = decodeURIComponent(match[1])
+        } else if (fileUrl.includes('/invoices/')) {
+          bucket = 'invoices'
+          const match = fileUrl.match(/\/invoices\/([^?]+)/)
+          if (match) path = decodeURIComponent(match[1])
+        }
+
+        if (bucket && path) {
+          console.log(`Deleting file from ${bucket}: ${path}`)
+          const { error: storageError } = await supabase.storage
+            .from(bucket)
+            .remove([path])
+          if (storageError) {
+            console.warn('File deletion failed (storage):', storageError)
+          } else {
+            console.log('File deleted successfully')
+          }
+        } else {
+          console.warn('Could not parse bucket/path from URL:', fileUrl)
+        }
+      } catch (err) {
+        console.warn('Error parsing file URL for deletion:', err)
+      }
+    }
+
+    fetchTransactions()
   }
 
   const handleStatusToggle = async (t) => {
     if (t.type === 'expense') {
-      alert('Expenses are always marked as paid on the issue date.')
+      alert('Kuitit merkataan aina maksetuksi')
       return
     }
 
@@ -592,231 +681,289 @@ function App() {
   // =============================================
   const handleInvoiceChange = (e) => {
     setInvoiceData({ ...invoiceData, [e.target.name]: e.target.value })
+    // If user starts editing, remove the old success state
+    if (lastInvoiceUrl) {
+      setLastInvoiceUrl('')
+      setLastInvoiceNumber('')
+      setInvoiceViewed(false)
+    }
   }
 
   const handleInvoiceSubmit = async (e) => {
     e.preventDefault()
     if (!user) return
+    setIsInvoiceLoading(true)
+    setStatusMessage('LUON LASKUA...')
+    
+    try {
+      const qty = parseFloat(invoiceData.quantity)
+      const price = parseFloat(invoiceData.unit_price)
+      const net = qty * price
+      const taxRate = parseFloat(invoiceData.tax_rate)
+      const taxAmount = net * (taxRate / 100)
+      const gross = net + taxAmount
 
-    const qty = parseFloat(invoiceData.quantity)
-    const price = parseFloat(invoiceData.unit_price)
-    const net = qty * price
-    const taxRate = parseFloat(invoiceData.tax_rate)
-    const taxAmount = net * (taxRate / 100)
-    const gross = net + taxAmount
+      const issueDate = new Date(invoiceData.date_issued)
+      const dueDate = new Date(issueDate)
+      dueDate.setDate(dueDate.getDate() + 14)
+      const formattedDueDate = dueDate.toISOString().split('T')[0]
 
-    const issueDate = new Date(invoiceData.date_issued)
-    const dueDate = new Date(issueDate)
-    dueDate.setDate(dueDate.getDate() + 14)
-    const formattedDueDate = dueDate.toISOString().split('T')[0]
+      // --- Generate PDF ---
+      const safeSettings = {
+        company_name: settings.company_name || 'Yritys Oy',
+        company_address: settings.company_address || 'Osoite',
+        company_phone: settings.company_phone || '',
+        company_email: settings.company_email || '',
+        company_iban: settings.company_iban || '',
+        company_swift: settings.company_swift || '',
+        business_id: settings.business_id || '',
+        company_vat: settings.company_vat || '',
+        delay_tax_rate: settings.delay_tax_rate || '11.00'
+      }
 
-    // --- Generate PDF (same as before) ---
-    const safeSettings = {
-      company_name: settings.company_name || 'Yritys Oy',
-      company_address: settings.company_address || 'Osoite',
-      company_phone: settings.company_phone || '',
-      company_email: settings.company_email || '',
-      company_iban: settings.company_iban || '',
-      company_swift: settings.company_swift || '',
-      business_id: settings.business_id || '',
-      company_vat: settings.company_vat || '',
-      delay_tax_rate: settings.delay_tax_rate || '11.00'
-    }
+      const doc = new jsPDF()
+      doc.setFontSize(22)
+      doc.setFont(undefined, 'bold')
+      doc.text(safeSettings.company_name, 14, 20)
+      doc.text('LASKU', 196, 20, { align: 'right' })
+      doc.setFontSize(12)
+      doc.setFont(undefined, 'normal')
+      doc.text(invoiceData.buyer_name || 'Asiakas', 14, 35)
 
-    const doc = new jsPDF()
-    doc.setFontSize(22)
-    doc.setFont(undefined, 'bold')
-    doc.text(safeSettings.company_name, 14, 20)
-    doc.text('LASKU', 196, 20, { align: 'right' })
-    doc.setFontSize(12)
-    doc.setFont(undefined, 'normal')
-    doc.text(invoiceData.buyer_name || 'Asiakas', 14, 35)
+      const buyerAddress = invoiceData.buyer_address || ''
+      doc.text(doc.splitTextToSize(buyerAddress, 80), 14, 41)
 
-    const buyerAddress = invoiceData.buyer_address || ''
-    doc.text(doc.splitTextToSize(buyerAddress, 80), 14, 41)
-
-    autoTable(doc, {
-      startY: 28,
-      margin: { left: 120 },
-      theme: 'plain',
-      body: [
-        ['Laskun numero', invoiceData.invoice_number || ''],
-        ['Laskun päiväys', invoiceData.date_issued || ''],
-        ['Maksuehto', '14 päivää'],
-        ['Eräpäivä', formattedDueDate || ''],
-        ['Viivästyskorko', safeSettings.delay_tax_rate + '%'],
-        ['Viitenumero', invoiceData.reference_number || '']
-      ],
-      styles: { fontSize: 10, cellPadding: 1 },
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } }
-    })
-
-    autoTable(doc, {
-      startY: Math.max(doc.lastAutoTable.finalY + 10, 65),
-      head: [['Kuvaus', 'Määrä', 'á-hinta', 'Yhteensä']],
-      body: [[
-        invoiceData.description || '',
-        qty || 0,
-        price.toFixed(2) + '€',
-        net.toFixed(2) + '€'
-      ]],
-      theme: 'grid',
-      headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0] },
-      styles: { fontSize: 10 }
-    })
-
-    const finalY = doc.lastAutoTable.finalY
-    doc.setFontSize(10)
-    doc.setFont(undefined, 'bold')
-    doc.text('Hankkeen tiedot', 14, finalY + 10)
-    doc.setFont(undefined, 'normal')
-    doc.text(invoiceData.project_details || '', 14, finalY + 16)
-
-    autoTable(doc, {
-      startY: finalY + 10,
-      margin: { left: 120 },
-      theme: 'plain',
-      body: [
-        ['Yhteensä (alv 0%)', net.toFixed(2) + '€'],
-        [`${taxRate.toFixed(2)}% ALV`, taxAmount.toFixed(2) + '€'],
-        ['Maksettava yhteensä', gross.toFixed(2) + '€']
-      ],
-      styles: { fontSize: 10, cellPadding: 1.5 },
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 }, 1: { halign: 'right' } }
-    })
-
-    const footerY = 270
-    doc.setFontSize(8)
-    doc.setTextColor(100, 100, 100)
-    doc.text(`${safeSettings.company_name} | ${safeSettings.company_address}`, 105, footerY, { align: 'center' })
-    doc.text(`Puh: ${safeSettings.company_phone} | Email: ${safeSettings.company_email}`, 105, footerY + 5, { align: 'center' })
-    doc.text(`IBAN: ${safeSettings.company_iban} | SWIFT: ${safeSettings.company_swift}`, 105, footerY + 10, { align: 'center' })
-    doc.text(`Y-tunnus: ${safeSettings.business_id} | ALV-nro: ${safeSettings.company_vat}`, 105, footerY + 15, { align: 'center' })
-
-    // --- Upload PDF to Supabase Storage ---
-    const pdfBlob = doc.output('blob')
-    const pdfFileName = `${user.id}/invoice_${invoiceData.invoice_number}_${Date.now()}.pdf`
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('invoices')
-      .upload(pdfFileName, pdfBlob, {
-        contentType: 'application/pdf',
-        cacheControl: '3600'
+      autoTable(doc, {
+        startY: 28,
+        margin: { left: 120 },
+        theme: 'plain',
+        body: [
+          ['Laskun numero', invoiceData.invoice_number || ''],
+          ['Laskun päiväys', invoiceData.date_issued || ''],
+          ['Maksuehto', '14 päivää'],
+          ['Eräpäivä', formattedDueDate || ''],
+          ['Viivästyskorko', safeSettings.delay_tax_rate + '%'],
+          ['Viitenumero', invoiceData.reference_number || '']
+        ],
+        styles: { fontSize: 10, cellPadding: 1 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } }
       })
 
-    let pdfUrl = null
-    if (!uploadError) {
-      const { data: { publicUrl } } = supabase.storage.from('invoices').getPublicUrl(pdfFileName)
-      pdfUrl = publicUrl
-    }
+      autoTable(doc, {
+        startY: Math.max(doc.lastAutoTable.finalY + 10, 65),
+        head: [['Kuvaus', 'Määrä', 'á-hinta', 'Yhteensä']],
+        body: [[
+          invoiceData.description || '',
+          qty || 0,
+          price.toFixed(2) + '€',
+          net.toFixed(2) + '€'
+        ]],
+        theme: 'grid',
+        headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0] },
+        styles: { fontSize: 10 }
+      })
 
-    // --- Save transaction to DB ---
-    const { error: dbError } = await supabase.from('transactions').insert([{
-      user_id: user.id,
-      type: 'income',
-      category_code: parseInt(invoiceData.income_category),
-      contact_name: invoiceData.buyer_name,
-      date_issued: invoiceData.date_issued,
-      due_date: formattedDueDate,
-      amount_gross: gross,
-      tax_rate: taxRate,
-      amount_net: net,
-      status: 'unpaid',
-      description: invoiceData.description,
-      invoice_pdf_url: pdfUrl
-    }])
+      const finalY = doc.lastAutoTable.finalY
+      doc.setFontSize(10)
+      doc.setFont(undefined, 'bold')
+      doc.text('Hankkeen tiedot', 14, finalY + 10)
+      doc.setFont(undefined, 'normal')
+      doc.text(invoiceData.project_details || '', 14, finalY + 16)
 
-    // --- Save customer to memory ---
-    await supabase.from('customers').upsert({
-      user_id: user.id,
-      name: invoiceData.buyer_name,
-      address: invoiceData.buyer_address,
-      reference_number: invoiceData.reference_number
-    }, { onConflict: 'user_id, name' })
+      autoTable(doc, {
+        startY: finalY + 10,
+        margin: { left: 120 },
+        theme: 'plain',
+        body: [
+          ['Yhteensä (alv 0%)', net.toFixed(2) + '€'],
+          [`${taxRate.toFixed(2)}% ALV`, taxAmount.toFixed(2) + '€'],
+          ['Maksettava yhteensä', gross.toFixed(2) + '€']
+        ],
+        styles: { fontSize: 10, cellPadding: 1.5 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 }, 1: { halign: 'right' } }
+      })
 
-    // --- Increment invoice number and save to settings ---
-    const nextNum = parseInt(invoiceData.invoice_number) + 1
-    setInvoiceData(prev => ({ ...prev, invoice_number: nextNum.toString() }))
-    await saveSettings({ next_invoice_number: nextNum })
+      const footerY = 270
+      doc.setFontSize(8)
+      doc.setTextColor(100, 100, 100)
+      doc.text(`${safeSettings.company_name} | ${safeSettings.company_address}`, 105, footerY, { align: 'center' })
+      doc.text(`Puh: ${safeSettings.company_phone} | Email: ${safeSettings.company_email}`, 105, footerY + 5, { align: 'center' })
+      doc.text(`IBAN: ${safeSettings.company_iban} | SWIFT: ${safeSettings.company_swift}`, 105, footerY + 10, { align: 'center' })
+      doc.text(`Y-tunnus: ${safeSettings.business_id} | ALV-nro: ${safeSettings.company_vat}`, 105, footerY + 15, { align: 'center' })
 
-    // --- Open PDF in new tab (works on mobile) ---
-    window.open(pdfUrl, `${invoiceData.invoice_number}.pdf`)
+      // --- Upload PDF to Supabase Storage ---
+      const pdfBlob = doc.output('blob')
+      const pdfFileName = `${user.id}/invoice_${invoiceData.invoice_number}_${Date.now()}.pdf`
 
-    // Clean up the blob URL after a short delay
-    setTimeout(() => URL.revokeObjectURL(pdfUrl), 1000)
+      const { error: uploadError } = await supabase.storage
+        .from('invoices')
+        .upload(pdfFileName, pdfBlob, {
+          contentType: 'application/pdf',
+          cacheControl: '3600'
+        })
 
-    if (!dbError) {
-      fetchTransactions()
-      setStatusMessage('Lasku luotu ja tallennettu!')
-      setTimeout(() => setStatusMessage(''), 3000)
-    } else {
-      setStatusMessage('Virhe tallennuksessa: ' + dbError.message)
+      let pdfUrl = null
+      if (!uploadError) {
+        // Generate signed URL for private bucket
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from('invoices')
+          .createSignedUrl(pdfFileName, 1209600) // 14 days expiry
+
+        if (!signedError) {
+          pdfUrl = signedData.signedUrl
+          // Set state AFTER pdfUrl is populated
+          setLastInvoiceUrl(pdfUrl)
+          setLastInvoiceNumber(invoiceData.invoice_number)
+        } else {
+          console.error('Signed URL error:', signedError)
+        }
+      } else {
+        console.error('Upload error:', uploadError)
+      }
+
+      // --- Save transaction to DB ---
+      const { error: dbError } = await supabase.from('transactions').insert([{
+        user_id: user.id,
+        type: 'income',
+        category_code: parseInt(invoiceData.income_category),
+        contact_name: invoiceData.buyer_name,
+        date_issued: invoiceData.date_issued,
+        due_date: formattedDueDate,
+        amount_gross: gross,
+        tax_rate: taxRate,
+        amount_net: net,
+        status: 'unpaid',
+        description: invoiceData.description,
+        invoice_pdf_url: pdfUrl
+      }])
+
+      // --- Save customer to memory ---
+      await supabase.from('customers').upsert({
+        user_id: user.id,
+        name: invoiceData.buyer_name,
+        address: invoiceData.buyer_address,
+        reference_number: invoiceData.reference_number
+      }, { onConflict: 'user_id, name' })
+
+      // --- Increment invoice number and save to settings ---
+      const nextNum = parseInt(invoiceData.invoice_number) + 1
+      await saveSettings({ next_invoice_number: nextNum })
+      resetInvoiceForm(nextNum)
+
+      // --- Open PDF in new tab ---
+      if (pdfUrl) {
+        window.open(pdfUrl, '_blank')
+      }
+
+      if (!dbError) {
+        fetchTransactions()
+        setStatusMessage('LASKU VALMIS')
+        setTimeout(() => setStatusMessage(''), 3000)
+      } else {
+        setStatusMessage('VIRHE: ' + dbError.message)
+      }
+    } catch (err) {
+      setStatusMessage('VIRHE: ' + err.message)
+    } finally {
+      setIsInvoiceLoading(false)
     }
   }
 
   // =============================================
   // 5. REPORTING LOGIC (Cash Basis)
   // =============================================
+
   const reportData = useMemo(() => {
-    let totalVatCollected = 0
-    let totalVatPaid = 0
-    let totalIncomeNet = 0
-    let totalExpenseNet = 0
-    const alvSalesTax = { '25.5': 0, '24': 0, '14': 0, '10': 0 }
-    let zeroTaxSalesNet = 0
-    const expensesByCategory = {}
+  let totalVatCollected = 0
+  let totalVatPaid = 0
+  let totalIncomeNet = 0
+  let totalExpenseNet = 0
+  const alvSalesTax = {}
+  let zeroTaxSalesNet = 0
+  const expensesByCategory = {}
 
-    transactions.forEach(t => {
-      // Use date_paid for cash basis; fallback to date_issued if not paid yet
-      const accountingDateStr = (t.status === 'paid' && t.date_paid) ? t.date_paid : t.date_issued
-      const date = new Date(accountingDateStr)
-      if (date.getFullYear().toString() !== reportYear) return
+  transactions.forEach(t => {
+    // Use date_paid for cash basis; fallback to date_issued if not paid yet
+    const accountingDateStr = (t.status === 'paid' && t.date_paid) ? t.date_paid : t.date_issued
+    const date = new Date(accountingDateStr)
+    if (date.getFullYear().toString() !== reportYear) return
 
-      // Period filtering
-      if (effectivePeriod !== 'all') {
+    // Period filtering
+    if (effectivePeriod !== 'all') {
       const month = date.getMonth() + 1
       if (effectivePeriod.startsWith('Q')) {
-        // existing quarter logic
+        const q = parseInt(effectivePeriod[1])
+        if (q === 1 && month > 3) return
+        if (q === 2 && (month < 4 || month > 6)) return
+        if (q === 3 && (month < 7 || month > 9)) return
+        if (q === 4 && month < 10) return
       } else {
-        // monthly: effectivePeriod is like "04"
         if (month.toString().padStart(2, '0') !== effectivePeriod) return
       }
     }
 
-      const net = parseFloat(t.amount_net)
-      const gross = parseFloat(t.amount_gross)
-      const vatAmount = gross - net
+    const net = parseFloat(t.amount_net)
+    const gross = parseFloat(t.amount_gross)
+    const vatAmount = gross - net
 
-      if (t.type === 'income' && t.status === 'paid') {
-        totalVatCollected += vatAmount
-        totalIncomeNet += net
-        if (t.tax_rate === 0) {
-          zeroTaxSalesNet += net
-        } else {
-          const key = t.tax_rate.toString()
-          if (alvSalesTax[key] !== undefined) alvSalesTax[key] += vatAmount
-        }
-      } else if (t.type === 'expense') {
-        // Expenses are always 'paid' on date_issued (or date_paid if set)
-        totalVatPaid += vatAmount
-        totalExpenseNet += net
-        const code = t.category_code
-        if (!expensesByCategory[code]) expensesByCategory[code] = 0
-        expensesByCategory[code] += net
+    if (t.type === 'income' && t.status === 'paid') {
+      totalVatCollected += vatAmount
+      totalIncomeNet += net
+      if (t.tax_rate === 0) {
+        zeroTaxSalesNet += net
+      } else {
+        const key = t.tax_rate.toString()
+        // Initialize if not present
+        if (!alvSalesTax[key]) alvSalesTax[key] = 0
+        alvSalesTax[key] += vatAmount
+      }
+    } else if (t.type === 'expense') {
+      totalVatPaid += vatAmount
+      totalExpenseNet += net
+      const code = t.category_code
+      if (!expensesByCategory[code]) expensesByCategory[code] = 0
+      expensesByCategory[code] += net
+    }
+  })
+
+  return {
+    vatToPay: totalVatCollected - totalVatPaid,
+    totalVatCollected,
+    totalVatPaid,
+    totalIncomeNet,
+    totalExpenseNet,
+    profit: totalIncomeNet - totalExpenseNet,
+    alvSalesTax,
+    zeroTaxSalesNet,
+    expensesByCategory
+  }
+}, [transactions, reportYear, effectivePeriod])
+
+  const availableYears = useMemo(() => {
+    const years = new Set()
+    const currentYear = new Date().getFullYear()
+    
+    transactions.forEach(t => {
+      // Use the accounting date (cash basis)
+      const dateStr = (t.status === 'paid' && t.date_paid) ? t.date_paid : t.date_issued
+      if (dateStr) {
+        const year = new Date(dateStr).getFullYear()
+        if (!isNaN(year)) years.add(year)
       }
     })
+    
+    // Always include current year even if no transactions yet
+    years.add(currentYear)
+    
+    // Convert to array, sort descending (most recent first)
+    return Array.from(years).sort((a, b) => b - a)
+  }, [transactions])
 
-    return {
-      vatToPay: totalVatCollected - totalVatPaid,
-      totalVatCollected,
-      totalVatPaid,
-      totalIncomeNet,
-      totalExpenseNet,
-      profit: totalIncomeNet - totalExpenseNet,
-      alvSalesTax,
-      zeroTaxSalesNet,
-      expensesByCategory
+  useEffect(() => {
+    if (availableYears.length > 0 && !availableYears.includes(parseInt(reportYear))) {
+      setReportYear(availableYears[0].toString())
     }
-  }, [transactions, reportYear, effectivePeriod])
+  }, [availableYears, reportYear])
 
   // =============================================
   // 6. SETTINGS HANDLING
@@ -827,38 +974,62 @@ function App() {
   }
 
   const handleSettingsSave = async () => {
-    if (!user) return;
+    console.log('=== handleSettingsSave START ===')
+    if (!user) {
+      console.log('No user, aborting')
+      return
+    }
+
+    setIsSettingsSaving(true)
+    setStatusMessage('TALLENNETAAN ASETUKSIA...')
 
     const dbSettings = {
+      company_name: settings.company_name || '',
+      company_address: settings.company_address || '',
+      company_phone: settings.company_phone || '',
+      company_email: settings.company_email || '',
+      company_iban: settings.company_iban || '',
+      company_swift: settings.company_swift || '',
+      company_vat: settings.company_vat || '',
+      business_id: settings.business_id || '',
       default_tax_rate: parseFloat(settings.default_tax_rate) || 25.5,
+      invoice_prefix: settings.invoice_prefix || 'INV',
       next_invoice_number: parseInt(settings.next_invoice_number) || 1,
       delay_tax_rate: parseFloat(settings.delay_tax_rate) || 11.0,
-    };
+      vat_reporting_period: settings.vat_reporting_period || 'monthly',
+    }
 
-    // Use upsert with onConflict
+    console.log('Payload:', { user_id: user.id, ...dbSettings })
+
     const { error } = await supabase
       .from('user_settings')
-      .upsert({ 
-        user_id: user.id, 
-        ...dbSettings 
-      }, { 
-        onConflict: 'user_id' // This tells Supabase which column might cause a conflict
-      });
+      .upsert({ user_id: user.id, ...dbSettings }, { onConflict: 'user_id' })
 
     if (error) {
-      console.error("Failed to save settings:", error);
-      setStatusMessage('Error saving settings.');
+      console.error('Supabase error:', error)
+      setStatusMessage('VIRHE: ' + error.message)
     } else {
-      setStatusMessage('Settings saved!');
+      console.log('Settings saved successfully')
+      setStatusMessage('ASETUKSET TALLENNETTU!')
     }
-    setTimeout(() => setStatusMessage(''), 2000);
-  };
+
+    setIsSettingsSaving(false)
+    setTimeout(() => setStatusMessage(''), 2000)
+  }
 
   // =============================================
   // 7. RENDER
   // =============================================
   if (authLoading) {
-    return <div className="app-container"><h2>Loading...</h2></div>
+    return (
+      <div className="auth-container">
+        <div className="auth-card" style={{ textAlign: 'center' }}>
+          <h1 style={{ marginBottom: '8px' }}>📊 Lomake5</h1>
+          <p className="subtitle" style={{ marginBottom: '32px' }}>Ladataan...</p>
+          <div className="spinner"></div>
+        </div>
+      </div>
+    )
   }
 
   if (!user) {
@@ -966,6 +1137,7 @@ function App() {
                 <option value="25.5">25.5%</option>
                 <option value="24">24%</option>
                 <option value="14">14%</option>
+                <option value="13">13.5%</option>
                 <option value="10">10%</option>
                 <option value="0">0%</option>
               </select>
@@ -1037,6 +1209,17 @@ function App() {
                   <div className="action-cell">
                     <button onClick={() => handleEditClick(t)} className="edit-btn">MUOKKAA</button>
                     <button onClick={() => handleDelete(t.id)} className="delete-btn">POISTA</button>
+                    {(t.receipt_image_url || t.invoice_pdf_url) && (
+                      <button
+                        onClick={() => {
+                          const url = t.receipt_image_url || t.invoice_pdf_url
+                          window.open(url, '_blank')
+                        }}
+                        className="view-btn"
+                      >
+                        NÄYTÄ
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -1054,10 +1237,9 @@ function App() {
             <div className="input-group">
               <label>Vuosi</label>
               <select value={reportYear} onChange={(e) => setReportYear(e.target.value)}>
-                <option value="2024">2024</option>
-                <option value="2025">2025</option>
-                <option value="2026">2026</option>
-                <option value="2027">2027</option>
+                {availableYears.map(year => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
               </select>
             </div>
             <div className="input-group">
@@ -1108,9 +1290,15 @@ function App() {
               }</h3>
               <table className="report-table">
                 <tbody>
-                  <tr><th>25.5% (301)</th><td className="money">{reportData.alvSalesTax['25.5'].toFixed(2)}</td></tr>
-                  <tr><th>24% (301)</th><td className="money">{reportData.alvSalesTax['24'].toFixed(2)}</td></tr>
-                  <tr><th>14% (302)</th><td className="money">{reportData.alvSalesTax['14'].toFixed(2)}</td></tr>
+                  {Object.entries(reportData.alvSalesTax)
+                    .filter(([, amount]) => amount > 0)
+                    .sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]))
+                    .map(([rate, amount]) => (
+                      <tr key={rate}>
+                        <th>{rate}% ({rate === '25.5' || rate === '24' ? '301' : rate === '14' ? '302' : '301'})</th>
+                        <td className="money">{amount.toFixed(2)} €</td>
+                      </tr>
+                  ))}
                   <tr style={{ backgroundColor: 'var(--bg-main)' }}><th>Vähennyskelpoinen Vero (307)</th><td className="money">{reportData.totalVatPaid.toFixed(2)}</td></tr>
                   <tr style={{ fontWeight: 'bold' }}><th>Maksettava Vero (308)</th><td className="money">{reportData.vatToPay.toFixed(2)} €</td></tr>
                 </tbody>
@@ -1186,7 +1374,8 @@ function App() {
                         selectedCustomerId: customer.id,
                         buyer_name: customer.name,
                         buyer_address: customer.address || '',
-                        reference_number: customer.reference_number || ''
+                        reference_number: customer.reference_number || '',
+                        buyer_email: customer.email || ''
                       })
                     } else {
                       setInvoiceData({
@@ -1242,10 +1431,52 @@ function App() {
               <input type="text" name="project_details" value={invoiceData.project_details} onChange={handleInvoiceChange} />
             </div>
 
-            <button type="submit" className="submit-btn" style={{ backgroundColor: '#10b981' }}>
-              TALLENNA
+            <button
+              type="submit"
+              className="submit-btn"
+              style={{ backgroundColor: '#10b981' }}
+              disabled={isInvoiceLoading || !isInvoiceFormValid}
+            >
+              {isInvoiceLoading ? 'Tallennetaan...' : 'TALLENNA'}
             </button>
           </form>
+          {lastInvoiceUrl && (
+            <div style={{ marginTop: '24px', padding: '16px', backgroundColor: 'var(--bg-main)', borderRadius: '8px' }}>
+              <p style={{ marginBottom: '12px', fontWeight: 600 }}>
+                ✅ Lasku {lastInvoiceNumber} – {settings.company_name || 'Yritys'} luotu!
+              </p>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <button
+                  onClick={() => {
+                    window.open(lastInvoiceUrl, '_blank')
+                    setInvoiceViewed(true)
+                  }}
+                  className="edit-btn"
+                  style={{ flex: 1 }}
+                >
+                  📄 Näytä lasku
+                </button>
+                <button
+                  onClick={() => {
+                    const company = settings.company_name || 'Yritys'
+                    const subject = `Lasku ${lastInvoiceNumber} – ${company}`
+                    const body = `Hei,\n\nTässä linkki laskuun:\n${lastInvoiceUrl}\n\nKiitos!`
+                    navigator.clipboard?.writeText(lastInvoiceUrl).catch(() => {})
+                    window.location.href = `mailto:${invoiceData.buyer_email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+                  }}
+                  className="edit-btn"
+                  style={{ flex: 1, opacity: invoiceViewed ? 1 : 0.5 }}
+                  disabled={!invoiceViewed}
+                  title={invoiceViewed ? 'Lähetä sähköpostilla' : 'Katso lasku ensin'}
+                >
+                  📧 Lähetä sähköpostilla
+                </button>
+              </div>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px' }}>
+                Linkki on voimassa 14 päivää.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -1336,6 +1567,7 @@ function App() {
                 <option value="25.5">25.5%</option>
                 <option value="24">24%</option>
                 <option value="14">14%</option>
+                <option value="13.5">13.5%</option>
                 <option value="10">10%</option>
                 <option value="0">0%</option>
               </select>
@@ -1358,10 +1590,17 @@ function App() {
                 onChange={handleSettingsChange}
               />
             </div>
-            <button type="button" onClick={handleSettingsSave} className="submit-btn">
-              TALLENNA
+            <button
+              type="button"
+              className="submit-btn"
+              onClick={() => {
+                handleSettingsSave()
+              }}
+              disabled={isSettingsSaving}
+            >
+              {isSettingsSaving ? 'TALLENNETAAN...' : 'TALLENNA'}
             </button>
-            <button type="button" onClick={handleExportData} className="submit-btn">
+            <button type="button" onClick={handleExportData} className="edit-btn" style={{ flex: 1 }}>
               📥 LATAA VARMUUSKOPIO
             </button>
           </form>
