@@ -258,10 +258,7 @@ function App() {
       invoice_number: nextInvoiceNumber.toString(),
       date_issued: new Date().toISOString().split('T')[0],
     })
-    // Also clear the success card and 'viewed' flag
-    setLastInvoiceUrl('')
-    setLastInvoiceNumber('')
-    setInvoiceViewed(false)
+
   }
 
   // =============================================
@@ -679,6 +676,21 @@ function App() {
   // =============================================
   // 4. INVOICE GENERATION
   // =============================================
+  // Määritä verokannat tulokategorioille
+  const incomeTaxRates = {
+    3001: 25.5,
+    3002: 14,
+    3003: 10,
+    3004: 0,
+    3005: 0,
+    3006: 0,
+    3007: 0,
+    3008: 13.5,  // uusi
+    3100: 0,     // Muut tuotot
+    // lisää muita tarpeen mukaan
+  }
+
+
   const handleInvoiceChange = (e) => {
     setInvoiceData({ ...invoiceData, [e.target.name]: e.target.value })
     // If user starts editing, remove the old success state
@@ -804,14 +816,13 @@ function App() {
 
       let pdfUrl = null
       if (!uploadError) {
-        // Generate signed URL for private bucket
         const { data: signedData, error: signedError } = await supabase.storage
           .from('invoices')
-          .createSignedUrl(pdfFileName, 1209600) // 14 days expiry
+          .createSignedUrl(pdfFileName, 1209600) // 14 days
 
         if (!signedError) {
           pdfUrl = signedData.signedUrl
-          // Set state AFTER pdfUrl is populated
+          // ✅ Set state AFTER pdfUrl has the real URL
           setLastInvoiceUrl(pdfUrl)
           setLastInvoiceNumber(invoiceData.invoice_number)
         } else {
@@ -1344,7 +1355,15 @@ function App() {
               <select
                 name="income_category"
                 value={invoiceData.income_category}
-                onChange={handleInvoiceChange}
+                onChange={(e) => {
+                  const category = e.target.value;
+                  const taxRate = incomeTaxRates[category] || 25.5; // oletus 25.5 jos ei löydy
+                  setInvoiceData({
+                    ...invoiceData,
+                    income_category: category,
+                    tax_rate: taxRate.toString()  // aseta oikea verokanta
+                  });
+                }}
                 required
               >
                 <option value="">-- Valitse --</option>
@@ -1432,13 +1451,26 @@ function App() {
             </div>
 
             <button
-              type="submit"
-              className="submit-btn"
-              style={{ backgroundColor: '#10b981' }}
-              disabled={isInvoiceLoading || !isInvoiceFormValid}
-            >
-              {isInvoiceLoading ? 'Tallennetaan...' : 'TALLENNA'}
-            </button>
+            type="submit"
+            className="submit-btn"
+            disabled={isInvoiceLoading || !isInvoiceFormValid}
+            style={{
+              backgroundColor: isInvoiceLoading
+                ? 'var(--primary-blue)'
+                : isInvoiceFormValid
+                  ? '#10b981'
+                  : '#e5e7eb',           // light grey when disabled
+              color: isInvoiceFormValid ? 'white' : '#9ca3af',
+              border: isInvoiceFormValid ? 'none' : '1px solid #fca5a5', // subtle red hint
+              cursor: isInvoiceFormValid ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {isInvoiceLoading
+              ? 'Tallennetaan...'
+              : isInvoiceFormValid
+                ? 'TALLENNA'
+                : 'TÄYTÄ KAIKKI KOHDAT'}
+          </button>
           </form>
           {lastInvoiceUrl && (
             <div style={{ marginTop: '24px', padding: '16px', backgroundColor: 'var(--bg-main)', borderRadius: '8px' }}>
