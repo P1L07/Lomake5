@@ -1356,12 +1356,13 @@ function App() {
                 name="income_category"
                 value={invoiceData.income_category}
                 onChange={(e) => {
-                  const category = e.target.value;
-                  const taxRate = incomeTaxRates[category] || 25.5; // oletus 25.5 jos ei löydy
+                  const category = e.target.value; // tämä on merkkijono
+                  const categoryNum = parseInt(category, 10); // muunna numeroksi
+                  const taxRate = incomeTaxRates[categoryNum] || 25.5;
                   setInvoiceData({
                     ...invoiceData,
                     income_category: category,
-                    tax_rate: taxRate.toString()  // aseta oikea verokanta
+                    tax_rate: String(taxRate)
                   });
                 }}
                 required
