@@ -572,7 +572,7 @@ function App() {
       contact_name: t.contact_name,
       date_issued: t.date_issued,
       amount_gross: t.amount_gross,
-      tax_rate: t.tax_rate,
+      ax_rate: String(t.tax_rate),
       y_tunnus: '',
       receipt_url: t.receipt_image_url
     })
@@ -685,8 +685,8 @@ function App() {
     3005: 0,
     3006: 0,
     3007: 0,
-    3008: 13.5,  // uusi
-    3100: 0,     // Muut tuotot
+    3008: 13.5,
+    3100: 0, 
     // lisää muita tarpeen mukaan
   }
 
