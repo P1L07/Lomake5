@@ -1121,13 +1121,30 @@ function App() {
             </div>
             <div className="input-group">
               <label>KATEGORIA</label>
-              <select name="category_code" value={formData.category_code} onChange={(e) => setFormData({...formData, category_code: e.target.value})} required>
-                {categories
-                  .filter(c => c.type === formData.type)
-                  .map(c => (
-                    <option key={c.code} value={c.code}>{c.code} - {c.name_fi}</option>
-                  ))
-                }
+              <select
+                name="category_code"
+                value={formData.category_code}
+                onChange={(e) => {
+                  const newCategory = e.target.value; // merkkijono
+                  const categoryNum = parseInt(newCategory, 10);
+                  // Haetaan luokka tietokannasta, jotta tiedetään onko income/expense
+                  const selectedCategory = categories.find(c => c.code === categoryNum);
+                  if (selectedCategory && selectedCategory.type === 'income') {
+                    // Aseta verokanta automaattisesti tulokategorioille
+                    const autoTax = incomeTaxRates[categoryNum] || 25.5;
+                    setFormData({
+                      ...formData,
+                      category_code: newCategory,
+                      tax_rate: String(autoTax)
+                    });
+                  } else {
+                    // Menoille tai tuntemattomille säilytetään nykyinen verokanta
+                    setFormData({ ...formData, category_code: newCategory });
+                  }
+                }}
+                required
+              >
+                {/* ... vaihtoehdot ... */}
               </select>
             </div>
             <div className="input-group">
