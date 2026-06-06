@@ -40,6 +40,18 @@ const DEFAULT_INVOICE_DATA = {
   selectedCustomerId: '',
 };
 
+const INCOME_TAX_RATES = {
+  3001: 25.5,
+  3002: 14,
+  3003: 10,
+  3004: 0,
+  3005: 0,
+  3006: 0,
+  3007: 0,
+  3008: 13.5,
+  3100: 0,
+}
+
 function App() {
   // --- AUTH STATE ---
   const [user, setUser] = useState(null)
@@ -1123,28 +1135,32 @@ function App() {
               <label>KATEGORIA</label>
               <select
                 name="category_code"
-                value={formData.category_code}
+                value={String(formData.category_code)}  // varmistetaan merkkijono
                 onChange={(e) => {
-                  const newCategory = e.target.value; // merkkijono
+                  const newCategory = e.target.value;   // esim. "3001"
                   const categoryNum = parseInt(newCategory, 10);
-                  // Haetaan luokka tietokannasta, jotta tiedetään onko income/expense
                   const selectedCategory = categories.find(c => c.code === categoryNum);
                   if (selectedCategory && selectedCategory.type === 'income') {
-                    // Aseta verokanta automaattisesti tulokategorioille
-                    const autoTax = incomeTaxRates[categoryNum] || 25.5;
+                    // Automaattinen verokanta tulokategorioille
+                    const autoTax = INCOME_TAX_RATES[categoryNum] || 25.5;
                     setFormData({
                       ...formData,
                       category_code: newCategory,
                       tax_rate: String(autoTax)
                     });
                   } else {
-                    // Menoille tai tuntemattomille säilytetään nykyinen verokanta
+                    // Menoille tai tuntemattomille vain kategoria päivittyy
                     setFormData({ ...formData, category_code: newCategory });
                   }
                 }}
                 required
               >
-                {/* ... vaihtoehdot ... */}
+                {categories
+                  .filter(c => c.type === formData.type)
+                  .map(c => (
+                    <option key={c.code} value={c.code}>{c.code} - {c.name_fi}</option>
+                  ))
+                }
               </select>
             </div>
             <div className="input-group">
@@ -1375,7 +1391,7 @@ function App() {
                 onChange={(e) => {
                   const category = e.target.value; // tämä on merkkijono
                   const categoryNum = parseInt(category, 10); // muunna numeroksi
-                  const taxRate = incomeTaxRates[categoryNum] || 25.5;
+                  const taxRate = INCOME_TAX_RATES[categoryNum] || 25.5;
                   setInvoiceData({
                     ...invoiceData,
                     income_category: category,
