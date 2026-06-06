@@ -572,7 +572,7 @@ function App() {
       contact_name: t.contact_name,
       date_issued: t.date_issued,
       amount_gross: t.amount_gross,
-      ax_rate: String(t.tax_rate),
+      tax_rate: String(t.tax_rate),
       y_tunnus: '',
       receipt_url: t.receipt_image_url
     })
@@ -1148,7 +1148,7 @@ function App() {
                 <option value="25.5">25.5%</option>
                 <option value="24">24%</option>
                 <option value="14">14%</option>
-                <option value="13">13.5%</option>
+                <option value="13.5">13.5%</option>
                 <option value="10">10%</option>
                 <option value="0">0%</option>
               </select>
