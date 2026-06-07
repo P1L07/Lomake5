@@ -623,39 +623,26 @@ function App() {
     }
 
     // If there's an associated file, delete it from storage
-    const fileUrl = transaction?.receipt_image_url || transaction?.invoice_pdf_url
+    const fileUrl = transaction?.receipt_image_url || transaction?.invoice_pdf_url;
     if (fileUrl) {
       try {
-        // Determine bucket and extract file path (handles both public and signed URLs)
-        let bucket = ''
-        let path = ''
-        
+        let bucket = '';
+        let path = '';
+        // Käsittele sekä julkiset että allekirjoitetut URL:t
         if (fileUrl.includes('/receipts/')) {
-          bucket = 'receipts'
-          // Match everything after /receipts/ up to ? or end of string
-          const match = fileUrl.match(/\/receipts\/([^?]+)/)
-          if (match) path = decodeURIComponent(match[1])
+          bucket = 'receipts';
+          const match = fileUrl.match(/\/receipts\/([^?]+)/);
+          if (match) path = decodeURIComponent(match[1]);
         } else if (fileUrl.includes('/invoices/')) {
-          bucket = 'invoices'
-          const match = fileUrl.match(/\/invoices\/([^?]+)/)
-          if (match) path = decodeURIComponent(match[1])
+          bucket = 'invoices';
+          const match = fileUrl.match(/\/invoices\/([^?]+)/);
+          if (match) path = decodeURIComponent(match[1]);
         }
-
         if (bucket && path) {
-          console.log(`Deleting file from ${bucket}: ${path}`)
-          const { error: storageError } = await supabase.storage
-            .from(bucket)
-            .remove([path])
-          if (storageError) {
-            console.warn('File deletion failed (storage):', storageError)
-          } else {
-            console.log('File deleted successfully')
-          }
-        } else {
-          console.warn('Could not parse bucket/path from URL:', fileUrl)
+          await supabase.storage.from(bucket).remove([path]);
         }
       } catch (err) {
-        console.warn('Error parsing file URL for deletion:', err)
+        console.warn('File deletion warning:', err);
       }
     }
 
@@ -1259,6 +1246,8 @@ const reportData = useMemo(() => {
               <th>TYYPPI</th>
               <th>ASIAKAS</th>
               <th>SUMMA (BRUTTO)</th>
+              <th>ALV %</th>
+              <th>NETTO</th>
               <th>TILANNE</th>
               <th>TOIMINNAT</th>
             </tr>
@@ -1270,6 +1259,8 @@ const reportData = useMemo(() => {
                 <td><span className={`badge ${t.type}`}>{t.type}</span></td>
                 <td title={t.contact_name}>{t.contact_name}</td>
                 <td style={{ fontWeight: '600' }}>{t.amount_gross}</td>
+                <td>{t.tax_rate}%</td>
+                <td>{t.amount_net}</td>
                 <td>
                   <span
                     className={`badge ${t.status}`}
@@ -1285,9 +1276,33 @@ const reportData = useMemo(() => {
                     <button onClick={() => handleDelete(t.id)} className="delete-btn">POISTA</button>
                     {(t.receipt_image_url || t.invoice_pdf_url) && (
                       <button
-                        onClick={() => {
-                          const url = t.receipt_image_url || t.invoice_pdf_url
-                          window.open(url, '_blank')
+                        onClick={async () => {
+                          const url = t.receipt_image_url || t.invoice_pdf_url;
+                          if (!url) return;
+                          // Jos URL on julkinen (vanha), yritä muodostaa allekirjoitettu URL
+                          if (url.includes('/object/public/')) {
+                            // Etsi tiedoston polku julkisesta URL:sta
+                            const match = url.match(/\/public\/(?:receipts|invoices)\/([^?]+)/);
+                            if (match) {
+                              const filePath = decodeURIComponent(match[1]);
+                              const bucket = url.includes('/receipts/') ? 'receipts' : 'invoices';
+                              const { data: signedData, error: signedError } = await supabase.storage
+                                .from(bucket)
+                                .createSignedUrl(filePath, 1209600);
+                              if (!signedError) {
+                                window.open(signedData.signedUrl, '_blank');
+                                await supabase.from('transactions').update({
+                                  invoice_pdf_url: signedData.signedUrl
+                                }).eq('id', t.id);
+                                setTransactions(prev => prev.map(item =>
+                                  item.id === t.id ? { ...item, invoice_pdf_url: signedData.signedUrl } : item
+                                ));
+                                return;
+                              }
+                            }
+                          }
+                          // Muussa tapauksessa avaa sellaisenaan
+                          window.open(url, '_blank');
                         }}
                         className="view-btn"
                       >
