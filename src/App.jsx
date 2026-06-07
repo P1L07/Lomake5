@@ -483,8 +483,12 @@ function App() {
           .upload(fileName, fileToUpload)
 
         if (!uploadError) {
-          const { data: { publicUrl } } = supabase.storage.from('receipts').getPublicUrl(fileName)
-          receiptUrl = publicUrl
+          const { data: signedData, error: signedError } = await supabase.storage
+            .from('receipts')
+            .createSignedUrl(fileName, 1209600) // 14 vrk
+          if (!signedError) {
+            receiptUrl = signedData.signedUrl
+          }
         }
       } catch (err) {
         console.warn('Image compression/upload failed:', err)
@@ -1245,7 +1249,7 @@ const reportData = useMemo(() => {
               <th>PÄIVÄMÄÄRÄ</th>
               <th>TYYPPI</th>
               <th>ASIAKAS</th>
-              <th>SUMMA (BRUTTO)</th>
+              <th>BRUTTO</th>
               <th>ALV %</th>
               <th>NETTO</th>
               <th>TILANNE</th>
@@ -1274,83 +1278,41 @@ const reportData = useMemo(() => {
                   <div className="action-cell">
                     <button onClick={() => handleEditClick(t)} className="edit-btn">MUOKKAA</button>
                     <button onClick={() => handleDelete(t.id)} className="delete-btn">POISTA</button>
+                    {(t.receipt_image_url || t.invoice_pdf_url) && (
                       <button
-                        onClick={async () => {
+                        onClick={() => {
                           const url = t.receipt_image_url || t.invoice_pdf_url;
-                          if (!url) return;
-
-                          // Apufunktio, joka näyttää virheilmoituksen eikä avaa rikkinäistä URL:ää
-                          const showErrorAndStop = (message) => {
-                            alert(message || 'Tiedoston avaaminen epäonnistui. Yritä kirjautua uudelleen.');
-                            // Palaa tästä, mitään ei avata
-                            return;
-                          };
-
-                          // Jos URL on jo allekirjoitettu (sisältää /sign/), avaa suoraan
-                          if (url.includes('/object/sign/')) {
-                            window.open(url, '_blank');
-                            return;
-                          }
-
-                          // Jos URL on julkinen (vanha), yritetään muodostaa allekirjoitettu
-                          if (url.includes('/object/public/')) {
-                            try {
-                              // Varmista, että meillä on tuore istunto
-                              const { data: { session } } = await supabase.auth.getSession();
-                              if (!session) {
-                                return showErrorAndStop('Et ole kirjautunut. Kirjaudu sisään ja yritä uudelleen.');
-                              }
-
-                              // Jos token on vanhentunut, päivitä se
-                              if (session.expires_at && new Date(session.expires_at * 1000) < new Date()) {
-                                const { error: refreshError } = await supabase.auth.refreshSession();
-                                if (refreshError) {
-                                  return showErrorAndStop('Istuntosi on vanhentunut. Kirjaudu uudelleen.');
-                                }
-                              }
-
-                              // Etsi tiedoston polku julkisesta URL:sta
+                          if (url) {
+                            // Jos URL on julkinen, päivitä se samalla taustalla
+                            if (url.includes('/object/public/')) {
+                              // Yritä luoda allekirjoitettu versio – jos epäonnistuu, avataan vanha
                               const match = url.match(/\/public\/(?:receipts|invoices)\/([^?]+)/);
-                              if (!match) {
-                                return showErrorAndStop('Tiedoston polkua ei voitu selvittää.');
+                              if (match) {
+                                const filePath = decodeURIComponent(match[1]);
+                                const bucket = url.includes('/receipts/') ? 'receipts' : 'invoices';
+                                supabase.storage
+                                  .from(bucket)
+                                  .createSignedUrl(filePath, 1209600)
+                                  .then(({ data: signedData, error: signedError }) => {
+                                    if (!signedError) {
+                                      // Päivitä tietokanta hiljaisesti
+                                      supabase.from('transactions').update({
+                                        [bucket === 'receipts' ? 'receipt_image_url' : 'invoice_pdf_url']: signedData.signedUrl
+                                      }).eq('id', t.id);
+                                      // Päivitä paikallinen tila
+                                      setTransactions(prev => prev.map(item =>
+                                        item.id === t.id ? { ...item, receipt_image_url: signedData.signedUrl, invoice_pdf_url: signedData.signedUrl } : item
+                                      ));
+                                      window.open(signedData.signedUrl, '_blank');
+                                    } else {
+                                      // Jos allekirjoitus epäonnistuu, avataan vanha (varoittaa 404:stä)
+                                      window.open(url, '_blank');
+                                    }
+                                  });
+                                return; // poistutaan, koska async jatkuu
                               }
-
-                              const filePath = decodeURIComponent(match[1]);
-                              const bucket = url.includes('/receipts/') ? 'receipts' : 'invoices';
-
-                              // Luo allekirjoitettu URL (14 vrk)
-                              const { data: signedData, error: signedError } = await supabase.storage
-                                .from(bucket)
-                                .createSignedUrl(filePath, 1209600);
-
-                              if (signedError) {
-                                console.error('Allekirjoitusvirhe:', signedError);
-                                // Jos virhe on InvalidJWT, istuntoa ei voitu korjata
-                                if (signedError.message.includes('InvalidJWT') || signedError.message.includes('exp')) {
-                                  return showErrorAndStop('Istuntosi on vanhentunut. Kirjaudu ulos ja takaisin sisään.');
-                                }
-                                return showErrorAndStop('Tiedostoa ei voida näyttää. Yritä myöhemmin uudelleen.');
-                              }
-
-                              // Onnistui: avaa uusi allekirjoitettu URL
-                              window.open(signedData.signedUrl, '_blank');
-
-                              // Päivitä tietokantaan uusi URL, jotta jatkossa toimii suoraan
-                              await supabase.from('transactions').update({
-                                invoice_pdf_url: signedData.signedUrl
-                              }).eq('id', t.id);
-
-                              // Päivitä paikallinen tila
-                              setTransactions(prev => prev.map(item =>
-                                item.id === t.id ? { ...item, invoice_pdf_url: signedData.signedUrl } : item
-                              ));
-                            } catch (e) {
-                              console.error('Yllättävä virhe:', e);
-                              return showErrorAndStop('Odottamaton virhe. Yritä kirjautua uudelleen.');
                             }
-                          } else {
-                            // URL ei ollut julkinen eikä allekirjoitettu – ehkä tuntematon muoto
-                            // Yritetään silti avata
+                            // Muussa tapauksessa avaa sellaisenaan
                             window.open(url, '_blank');
                           }
                         }}
@@ -1358,6 +1320,7 @@ const reportData = useMemo(() => {
                       >
                         NÄYTÄ
                       </button>
+                    )}
                   </div>
                 </td>
               </tr>
