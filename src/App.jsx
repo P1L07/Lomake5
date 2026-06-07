@@ -45,12 +45,16 @@ const INCOME_TAX_RATES = {
   3002: 14,
   3003: 10,
   3004: 0,
-  3005: 0,
-  3006: 0,
-  3007: 0,
+  3005: 0,      // EU-myynti 0%
+  3006: 0,      // Muut maat 0%
+  3007: 0,      // Käänteinen vero (ei veroa)
   3008: 13.5,
+  3010: 0,      // Tavaramyynnit EU-maihin
+  3011: 0,      // Palvelumyynnit EU-maihin
   3100: 0,
-}
+  3901: 0,      // Rakentamispalvelun myynnit (käännetty)
+  3903: 0,      // Metalliromun myynnit (käännetty)
+};
 
 function App() {
   // --- AUTH STATE ---
@@ -896,58 +900,76 @@ function App() {
   // 5. REPORTING LOGIC (Cash Basis)
   // =============================================
 
-  const reportData = useMemo(() => {
-  let totalVatCollected = 0
-  let totalVatPaid = 0
-  let totalIncomeNet = 0
-  let totalExpenseNet = 0
-  const alvSalesTax = {}
-  let zeroTaxSalesNet = 0
-  const expensesByCategory = {}
+const reportData = useMemo(() => {
+  let totalVatCollected = 0;
+  let totalVatPaid = 0;
+  let totalIncomeNet = 0;
+  let totalExpenseNet = 0;
+  const alvSalesTax = {};
+  let zeroTaxSalesNet = 0;
+  const expensesByCategory = {};
+
+  // Uudet kentät
+  let euSalesGoods = 0;        // Tavaramyynnit EU-maihin (netto)
+  let euSalesServices = 0;     // Palvelumyynnit EU-maihin (netto)
+  let euPurchasesGoods = 0;    // Tavaraostot EU-maista (netto)
+  let euPurchasesServices = 0; // Palveluostot EU-maista (netto)
+  let importGoods = 0;         // Tavaroiden maahantuonti EU:n ulkop.
+  let reverseChargeSales = 0;  // Käännetyn verovelvollisuuden myynnit
+  let reverseChargePurchases = 0; // Käännetyn verovelvollisuuden ostot
 
   transactions.forEach(t => {
-    // Use date_paid for cash basis; fallback to date_issued if not paid yet
-    const accountingDateStr = (t.status === 'paid' && t.date_paid) ? t.date_paid : t.date_issued
-    const date = new Date(accountingDateStr)
-    if (date.getFullYear().toString() !== reportYear) return
+    const accountingDateStr = (t.status === 'paid' && t.date_paid) ? t.date_paid : t.date_issued;
+    const date = new Date(accountingDateStr);
+    if (date.getFullYear().toString() !== reportYear) return;
 
-    // Period filtering
     if (effectivePeriod !== 'all') {
-      const month = date.getMonth() + 1
+      const month = date.getMonth() + 1;
       if (effectivePeriod.startsWith('Q')) {
-        const q = parseInt(effectivePeriod[1])
-        if (q === 1 && month > 3) return
-        if (q === 2 && (month < 4 || month > 6)) return
-        if (q === 3 && (month < 7 || month > 9)) return
-        if (q === 4 && month < 10) return
+        const q = parseInt(effectivePeriod[1]);
+        if (q === 1 && month > 3) return;
+        if (q === 2 && (month < 4 || month > 6)) return;
+        if (q === 3 && (month < 7 || month > 9)) return;
+        if (q === 4 && month < 10) return;
       } else {
-        if (month.toString().padStart(2, '0') !== effectivePeriod) return
+        if (month.toString().padStart(2, '0') !== effectivePeriod) return;
       }
     }
 
-    const net = parseFloat(t.amount_net)
-    const gross = parseFloat(t.amount_gross)
-    const vatAmount = gross - net
+    const net = parseFloat(t.amount_net);
+    const gross = parseFloat(t.amount_gross);
+    const vatAmount = gross - net;
+    const code = t.category_code;
 
     if (t.type === 'income' && t.status === 'paid') {
-      totalVatCollected += vatAmount
-      totalIncomeNet += net
+      if (code === 3004 || code === 3005 || code === 3006 || code === 3010 || code === 3011) {
+        zeroTaxSalesNet += net;
+      }
+      if (code === 3010) euSalesGoods += net;           // Tavaramyynnit EU
+      if (code === 3011) euSalesServices += net;        // Palvelumyynnit EU
+      if (code === 3901 || code === 3903) reverseChargeSales += net; // Käännetty myynti
+      totalVatCollected += vatAmount;
+      totalIncomeNet += net;
       if (t.tax_rate === 0) {
-        zeroTaxSalesNet += net
+        // jo laskettiin zeroTaxSalesNet
       } else {
-        const key = t.tax_rate.toString()
-        // Initialize if not present
-        if (!alvSalesTax[key]) alvSalesTax[key] = 0
-        alvSalesTax[key] += vatAmount
+        const key = t.tax_rate.toString();
+        if (!alvSalesTax[key]) alvSalesTax[key] = 0;
+        alvSalesTax[key] += vatAmount;
       }
     } else if (t.type === 'expense') {
-      totalVatPaid += vatAmount
-      totalExpenseNet += net
-      const code = t.category_code
-      if (!expensesByCategory[code]) expensesByCategory[code] = 0
-      expensesByCategory[code] += net
+      totalVatPaid += vatAmount;
+      totalExpenseNet += net;
+      if (!expensesByCategory[code]) expensesByCategory[code] = 0;
+      expensesByCategory[code] += net;
+
+      // EU-ostot ja maahantuonnit
+      if (code === 3701) euPurchasesGoods += net;
+      if (code === 3702) euPurchasesServices += net;
+      if (code === 3801) importGoods += net;
+      if (code === 3902 || code === 3904) reverseChargePurchases += net;
     }
-  })
+  });
 
   return {
     vatToPay: totalVatCollected - totalVatPaid,
@@ -958,9 +980,17 @@ function App() {
     profit: totalIncomeNet - totalExpenseNet,
     alvSalesTax,
     zeroTaxSalesNet,
-    expensesByCategory
-  }
-}, [transactions, reportYear, effectivePeriod])
+    expensesByCategory,
+    // Uudet palautettavat kentät
+    euSalesGoods,
+    euSalesServices,
+    euPurchasesGoods,
+    euPurchasesServices,
+    importGoods,
+    reverseChargeSales,
+    reverseChargePurchases,
+  };
+}, [transactions, reportYear, effectivePeriod]);
 
   const availableYears = useMemo(() => {
     const years = new Set()
@@ -1298,10 +1328,10 @@ function App() {
               <div className="input-group">
                 <label>Kvarttaali</label>
                 <select value={selectedQuarter} onChange={(e) => setSelectedQuarter(e.target.value)}>
-                  <option value="Q1">Q1 (Tammi-Maalis)</option>
-                  <option value="Q2">Q2 (Huhti-Kesä)</option>
-                  <option value="Q3">Q3 (Heinä-Syys)</option>
-                  <option value="Q4">Q4 (Loka-Joulu)</option>
+                  <option value="Q1">Q1</option>
+                  <option value="Q2">Q2</option>
+                  <option value="Q3">Q3</option>
+                  <option value="Q4">Q4</option>
                 </select>
               </div>
             )}
@@ -1309,29 +1339,21 @@ function App() {
               <div className="input-group">
                 <label>Kuukausi</label>
                 <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}>
-                  <option value="01">Tammikuu</option>
-                  <option value="02">Helmikuu</option>
-                  <option value="03">Maaliskuu</option>
-                  <option value="04">Huhtikuu</option>
-                  <option value="05">Toukokuu</option>
-                  <option value="06">Kesäkuu</option>
-                  <option value="07">Heinäkuu</option>
-                  <option value="08">Elokuu</option>
-                  <option value="09">Syyskuu</option>
-                  <option value="10">Lokakuu</option>
-                  <option value="11">Marraskuu</option>
-                  <option value="12">Joulukuu</option>
+                  <option value="01">Tammikuu</option><option value="02">Helmikuu</option>
+                  <option value="03">Maaliskuu</option><option value="04">Huhtikuu</option>
+                  <option value="05">Toukokuu</option><option value="06">Kesäkuu</option>
+                  <option value="07">Heinäkuu</option><option value="08">Elokuu</option>
+                  <option value="09">Syyskuu</option><option value="10">Lokakuu</option>
+                  <option value="11">Marraskuu</option><option value="12">Joulukuu</option>
                 </select>
               </div>
             )}
           </div>
+
           <div className="report-grid">
+            {/* 1. Kotimaan myyntien verot */}
             <div className="report-card">
-              <h3>OmaVero (ALV) – {reportYear} {
-                reportPeriodType === 'year' ? '' :
-                reportPeriodType === 'quarter' ? selectedQuarter :
-                new Date(reportYear, parseInt(selectedMonth)-1).toLocaleDateString('fi-FI', { month: 'long' })
-              }</h3>
+              <h3>Kotimaan myynnit</h3>
               <table className="report-table">
                 <tbody>
                   {Object.entries(reportData.alvSalesTax)
@@ -1339,15 +1361,88 @@ function App() {
                     .sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]))
                     .map(([rate, amount]) => (
                       <tr key={rate}>
-                        <th>{rate}% ({rate === '25.5' || rate === '24' ? '301' : rate === '14' ? '302' : '301'})</th>
+                        <th>{rate} % vero</th>
                         <td className="money">{amount.toFixed(2)} €</td>
                       </tr>
-                  ))}
-                  <tr style={{ backgroundColor: 'var(--bg-main)' }}><th>Vähennyskelpoinen Vero (307)</th><td className="money">{reportData.totalVatPaid.toFixed(2)}</td></tr>
-                  <tr style={{ fontWeight: 'bold' }}><th>Maksettava Vero (308)</th><td className="money">{reportData.vatToPay.toFixed(2)} €</td></tr>
+                    ))}
                 </tbody>
               </table>
             </div>
+
+            {/* 2. Vähennettävä vero */}
+            <div className="report-card">
+              <h3>Vähennettävä vero</h3>
+              <table className="report-table">
+                <tbody>
+                  <tr>
+                    <th>Verokauden vähennettävä vero</th>
+                    <td className="money">{reportData.totalVatPaid.toFixed(2)} €</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 3. Maksettava vero */}
+            <div className="report-card">
+              <h3>Maksettava vero</h3>
+              <table className="report-table">
+                <tbody>
+                  <tr>
+                    <th>Maksettava vero</th>
+                    <td className="money">{reportData.vatToPay.toFixed(2)} €</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 4. 0-verokannan liikevaihto */}
+            <div className="report-card">
+              <h3>0-verokannan alainen liikevaihto</h3>
+              <table className="report-table">
+                <tbody>
+                  <tr>
+                    <th>Liikevaihto yhteensä</th>
+                    <td className="money">{reportData.zeroTaxSalesNet.toFixed(2)} €</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 5. EU-myynnit ja -ostot */}
+            <div className="report-card">
+              <h3>Myynnit ja ostot EU-maihin</h3>
+              <table className="report-table">
+                <tbody>
+                  <tr><th>Tavaramyynnit EU-maihin</th><td className="money">{reportData.euSalesGoods.toFixed(2)} €</td></tr>
+                  <tr><th>Palvelumyynnit EU-maihin</th><td className="money">{reportData.euSalesServices.toFixed(2)} €</td></tr>
+                  <tr><th>Tavaraostot EU-maista</th><td className="money">{reportData.euPurchasesGoods.toFixed(2)} €</td></tr>
+                  <tr><th>Palveluostot EU-maista</th><td className="money">{reportData.euPurchasesServices.toFixed(2)} €</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 6. Maahantuonnit EU:n ulkopuolelta */}
+            <div className="report-card">
+              <h3>Tavaroiden maahantuonnit</h3>
+              <table className="report-table">
+                <tbody>
+                  <tr><th>Tavaraostot EU:n ulkop.</th><td className="money">{reportData.importGoods.toFixed(2)} €</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 7. Käännetty verovelvollisuus */}
+            <div className="report-card">
+              <h3>Käännetty verovelvollisuus</h3>
+              <table className="report-table">
+                <tbody>
+                  <tr><th>Myynnit (rak/palv/metalli)</th><td className="money">{reportData.reverseChargeSales.toFixed(2)} €</td></tr>
+                  <tr><th>Ostot (rak/palv/metalli)</th><td className="money">{reportData.reverseChargePurchases.toFixed(2)} €</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 8. Lomake 5 tuloslaskelma */}
             <div className="report-card">
               <h3>LOMAKE 5 (TULO)</h3>
               <div className="summary-box">
@@ -1360,10 +1455,7 @@ function App() {
                 <tbody>
                   <tr><th>TULO (NETTO)</th><td className="money">{reportData.totalIncomeNet.toFixed(2)} €</td></tr>
                   {Object.entries(reportData.expensesByCategory).map(([code, amount]) => (
-                    <tr key={code}>
-                      <th>Kulu {code}</th>
-                      <td className="money">{amount.toFixed(2)} €</td>
-                    </tr>
+                    <tr key={code}><th>Kulu {code}</th><td className="money">{amount.toFixed(2)} €</td></tr>
                   ))}
                 </tbody>
               </table>
