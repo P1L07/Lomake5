@@ -1279,29 +1279,43 @@ const reportData = useMemo(() => {
                         onClick={async () => {
                           const url = t.receipt_image_url || t.invoice_pdf_url;
                           if (!url) return;
+
                           // Jos URL on julkinen (vanha), yritä muodostaa allekirjoitettu URL
                           if (url.includes('/object/public/')) {
-                            // Etsi tiedoston polku julkisesta URL:sta
-                            const match = url.match(/\/public\/(?:receipts|invoices)\/([^?]+)/);
-                            if (match) {
-                              const filePath = decodeURIComponent(match[1]);
-                              const bucket = url.includes('/receipts/') ? 'receipts' : 'invoices';
-                              const { data: signedData, error: signedError } = await supabase.storage
-                                .from(bucket)
-                                .createSignedUrl(filePath, 1209600);
-                              if (!signedError) {
-                                window.open(signedData.signedUrl, '_blank');
-                                await supabase.from('transactions').update({
-                                  invoice_pdf_url: signedData.signedUrl
-                                }).eq('id', t.id);
-                                setTransactions(prev => prev.map(item =>
-                                  item.id === t.id ? { ...item, invoice_pdf_url: signedData.signedUrl } : item
-                                ));
-                                return;
+                            try {
+                              const match = url.match(/\/public\/(?:receipts|invoices)\/([^?]+)/);
+                              if (match) {
+                                const filePath = decodeURIComponent(match[1]);
+                                const bucket = url.includes('/receipts/') ? 'receipts' : 'invoices';
+
+                                // Varmista, että istunto on tuore
+                                const { data: { session }, error: sessionError } = await supabase.auth.refreshSession();
+                                if (sessionError) throw sessionError;
+
+                                const { data: signedData, error: signedError } = await supabase.storage
+                                  .from(bucket)
+                                  .createSignedUrl(filePath, 1209600);
+
+                                if (!signedError) {
+                                  window.open(signedData.signedUrl, '_blank');
+                                  // Päivitä tietueeseen uusi allekirjoitettu URL
+                                  await supabase.from('transactions').update({
+                                    invoice_pdf_url: signedData.signedUrl
+                                  }).eq('id', t.id);
+                                  setTransactions(prev => prev.map(item =>
+                                    item.id === t.id ? { ...item, invoice_pdf_url: signedData.signedUrl } : item
+                                  ));
+                                  return;
+                                }
                               }
+                            } catch (e) {
+                              console.warn('Signed URL creation failed, falling back to original URL:', e);
+                              // Jos epäonnistui, avaa alkuperäinen (vanha) URL, vaikka se olisi rikki
+                              window.open(url, '_blank');
+                              return;
                             }
                           }
-                          // Muussa tapauksessa avaa sellaisenaan
+                          // Muuten avaa sellaisenaan
                           window.open(url, '_blank');
                         }}
                         className="view-btn"
