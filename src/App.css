@@ -111,25 +111,24 @@ input:focus, select:focus, textarea:focus {
   margin-bottom: 16px;
 }
 
-/* Desktop: allow table to expand without forced scroll */
+/* Desktop: salli taulukon olla leveämpi, mutta pidä vieritys kontissa */
 @media (min-width: 769px) {
   .table-container {
-    overflow-x: visible;
+    overflow-x: auto;         /* vieritys tarvittaessa, ei pakota koko sivua skrollaamaan */
   }
 
   .transactions-table {
-    table-layout: auto;
-    min-width: 100%;
+    table-layout: fixed;      /* kiinteä asettelu, jotta sarakkeet pysyvät määritellyissä levyissään */
+    min-width: 800px;         /* tarvittava vähimmäisleveys, jotta mahtuu 8 saraketta */
   }
 
-  /* Remove fixed min-widths on desktop; let columns size naturally */
   .transactions-table th,
   .transactions-table td {
-    min-width: auto;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;  /* pitkät tekstit katkaistaan ... */
   }
 
-  /* Action buttons row layout */
   .action-cell {
     flex-wrap: nowrap;
   }
@@ -201,17 +200,21 @@ input:focus, select:focus, textarea:focus {
 
 /* Column widths (desktop) */
 .transactions-table th:nth-child(1),
-.transactions-table td:nth-child(1) { min-width: 90px; }
+.transactions-table td:nth-child(1) { min-width: 90px; }  /* Päivämäärä */
 .transactions-table th:nth-child(2),
-.transactions-table td:nth-child(2) { min-width: 70px; }
+.transactions-table td:nth-child(2) { min-width: 70px; }  /* Tyyppi */
 .transactions-table th:nth-child(3),
-.transactions-table td:nth-child(3) { min-width: 120px; max-width: 200px; }
+.transactions-table td:nth-child(3) { min-width: 110px; max-width: 150px; } /* Asiakas */
 .transactions-table th:nth-child(4),
-.transactions-table td:nth-child(4) { min-width: 100px; }
+.transactions-table td:nth-child(4) { min-width: 90px; }  /* Brutto */
 .transactions-table th:nth-child(5),
-.transactions-table td:nth-child(5) { min-width: 100px; }
+.transactions-table td:nth-child(5) { min-width: 60px; }  /* ALV% */
 .transactions-table th:nth-child(6),
-.transactions-table td:nth-child(6) { min-width: 180px; }
+.transactions-table td:nth-child(6) { min-width: 80px; }  /* Netto */
+.transactions-table th:nth-child(7),
+.transactions-table td:nth-child(7) { min-width: 90px; }  /* Tilanne */
+.transactions-table th:nth-child(8),
+.transactions-table td:nth-child(8) { min-width: 180px; } /* Toiminnot */
 
 .badge {
   display: inline-block;

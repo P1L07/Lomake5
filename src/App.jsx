@@ -1280,28 +1280,42 @@ const reportData = useMemo(() => {
                           const url = t.receipt_image_url || t.invoice_pdf_url;
                           if (!url) return;
 
-                          // Jos URL on julkinen (vanha), yritä muodostaa allekirjoitettu URL
+                          // Jos on julkinen URL (vanha), muunna se allekirjoitetuksi
                           if (url.includes('/object/public/')) {
                             try {
+                              // Hae ensin tuore istunto
+                              const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+                              if (sessionErr || !session) {
+                                // Istunto puuttuu – yritä kirjautua uudelleen (todennäköisesti uloskirjautunut)
+                                alert('Kirjaudu uudelleen nähdäksesi tiedoston.');
+                                return;
+                              }
+
+                              // Jos token on vanhentunut, päivitä se odottamalla refresh
+                              if (session.expires_at && new Date(session.expires_at * 1000) < new Date()) {
+                                const { data: { session: freshSession }, error: refreshErr } = await supabase.auth.refreshSession();
+                                if (refreshErr || !freshSession) {
+                                  alert('Istunnon päivitys epäonnistui. Kirjaudu uudelleen.');
+                                  return;
+                                }
+                              }
+
+                              // Jatka allekirjoitetun URL:n luomista
                               const match = url.match(/\/public\/(?:receipts|invoices)\/([^?]+)/);
                               if (match) {
                                 const filePath = decodeURIComponent(match[1]);
                                 const bucket = url.includes('/receipts/') ? 'receipts' : 'invoices';
-
-                                // Varmista, että istunto on tuore
-                                const { data: { session }, error: sessionError } = await supabase.auth.refreshSession();
-                                if (sessionError) throw sessionError;
-
                                 const { data: signedData, error: signedError } = await supabase.storage
                                   .from(bucket)
                                   .createSignedUrl(filePath, 1209600);
 
                                 if (!signedError) {
                                   window.open(signedData.signedUrl, '_blank');
-                                  // Päivitä tietueeseen uusi allekirjoitettu URL
+                                  // Päivitä tietueeseen uusi URL, jotta jatkossa toimii suoraan
                                   await supabase.from('transactions').update({
                                     invoice_pdf_url: signedData.signedUrl
                                   }).eq('id', t.id);
+                                  // Päivitä paikallinen tila
                                   setTransactions(prev => prev.map(item =>
                                     item.id === t.id ? { ...item, invoice_pdf_url: signedData.signedUrl } : item
                                   ));
@@ -1309,13 +1323,14 @@ const reportData = useMemo(() => {
                                 }
                               }
                             } catch (e) {
-                              console.warn('Signed URL creation failed, falling back to original URL:', e);
-                              // Jos epäonnistui, avaa alkuperäinen (vanha) URL, vaikka se olisi rikki
+                              console.warn('Allekirjoitetun URL:n luonti epäonnistui:', e);
+                              // Varaudutaan vanhaan URL:ään, vaikka se olisikin rikki
                               window.open(url, '_blank');
                               return;
                             }
                           }
-                          // Muuten avaa sellaisenaan
+
+                          // Jos ei julkinen, avaa suoraan (allekirjoitettu tai tuntematon)
                           window.open(url, '_blank');
                         }}
                         className="view-btn"
