@@ -573,8 +573,10 @@ function App() {
   return (
     <div className="app-layout">
       <aside className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
-        <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</button>
-        <h2>📊 Lomake5</h2>
+          <div className="sidebar-header">
+            <h2>📊 Lomake5</h2>
+            <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</button>
+          </div>
         <nav className="sidebar-nav">
           <button className={activeTab === 'ledger' ? 'active' : ''} onClick={() => setActiveTab('ledger')}><span className="nav-text">TOSITTEET</span></button>
           <button className={activeTab === 'reports' ? 'active' : ''} onClick={() => setActiveTab('reports')}><span className="nav-text">VERO</span></button>
@@ -605,7 +607,7 @@ function App() {
               </div>
               <div className="table-container">
                 <table className="transactions-table">
-                  <thead><tr><th>PÄIVÄMÄÄRÄ</th><th>TYYPPI</th><th>ASIAKAS</th><th>SUMMA (BRUTTO)</th><th>ALV %</th><th>NETTO</th><th>TILANNE</th><th>TOIMINNAT</th></tr></thead>
+                  <thead><tr><th>PÄIVÄMÄÄRÄ</th><th>TYYPPI</th><th>ASIAKAS</th><th>BRUTTO</th><th>ALV %</th><th>NETTO</th><th>TILANNE</th><th>TOIMINNAT</th></tr></thead>
                   <tbody>
                     {filteredTransactions.map((t) => (
                       <tr key={t.id}>
