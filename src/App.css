@@ -238,6 +238,10 @@ textarea { resize: vertical; }
   display: none;
 }
 
+.sidebar.collapsed .sidebar-nav {
+  display: none;
+}
+
 /* Sidebar header: logo + toggle */
 .sidebar-header {
   display: flex;
