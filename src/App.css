@@ -503,3 +503,42 @@ textarea { resize: vertical; }
   .form-grid { grid-template-columns: 1fr !important; }
   .submit-btn, .cancel-btn { width: 100%; }
 }
+
+/* Mobiilissa avoin sivupalkki saa tarpeeksi leveyttä */
+@media (max-width: 600px) {
+  .sidebar:not(.collapsed) {
+    width: 200px;
+    padding: 20px 12px;
+  }
+  .sidebar:not(.collapsed) h2,
+  .sidebar:not(.collapsed) .nav-text,
+  .sidebar:not(.collapsed) .user-email,
+  .sidebar:not(.collapsed) .sign-out-btn {
+    display: block; /* näytä tekstit */
+  }
+  .sidebar:not(.collapsed) .sidebar-nav button {
+    text-align: left;
+    justify-content: flex-start;
+  }
+}
+
+/* Pinoa otsikko ja toimintopainike mobiilissa */
+@media (max-width: 600px) {
+  .ledger-fullscreen > div:first-child,
+  .form-card > div:first-child {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 600px) {
+  .main-content {
+    padding: 12px;
+  }
+  .submit-btn, .cancel-btn {
+    width: 100%;
+  }
+}
+
+

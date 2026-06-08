@@ -487,7 +487,7 @@ function App() {
       const footerY = 270
       doc.setFontSize(8); doc.setTextColor(100, 100, 100)
       doc.text(`${safeSettings.company_name} | ${safeSettings.company_address}`, 105, footerY, { align: 'center' })
-      doc.text(`Puh: ${safeSettings.company_phone} | Email: ${safeSettings.company_email}`, 105, footerY + 5, { align: 'center' })
+      doc.text(`Puh: ${safeSettings.company_phone} | Sähköposti: ${safeSettings.company_email}`, 105, footerY + 5, { align: 'center' })
       doc.text(`IBAN: ${safeSettings.company_iban} | SWIFT: ${safeSettings.company_swift}`, 105, footerY + 10, { align: 'center' })
       doc.text(`Y-tunnus: ${safeSettings.business_id} | ALV-nro: ${safeSettings.company_vat}`, 105, footerY + 15, { align: 'center' })
       const pdfBlob = doc.output('blob')
