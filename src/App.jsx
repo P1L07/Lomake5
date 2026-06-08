@@ -478,7 +478,7 @@ function App() {
       doc.setFontSize(12); doc.setFont(undefined, 'normal'); doc.text(invoiceData.buyer_name || 'Asiakas', 14, 35)
       const buyerAddress = invoiceData.buyer_address || ''
       doc.text(doc.splitTextToSize(buyerAddress, 80), 14, 41)
-      autoTable(doc, { startY: 28, margin: { left: 120 }, theme: 'plain', body: [['Laskun numero', invoiceData.invoice_number || ''], ['Laskun päiväys', invoiceData.date_issued || ''], ['Maksuehto', '14 päivää'], ['Eräpäivä', formattedDueDate || ''], ['Viivästyskorko', safeSettings.delay_tax_rate + '%'], ['Viitenumero', invoiceData.reference_number || '']], styles: { fontSize: 10, cellPadding: 1 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } } })
+      autoTable(doc, { startY: 28, margin: { left: 120 }, theme: 'plain', body: [['Laskun numero', invoiceData.invoice_number || ''], ['Laskun päiväys', invoiceData.date_issued?.split('-').reverse().join('.') || ''], ['Maksuehto', '14 päivää'], ['Eräpäivä', formattedDueDate?.split('-').reverse().join('.') || ''], ['Viivästyskorko', safeSettings.delay_tax_rate + '%'], ['Viitenumero', invoiceData.reference_number || '']], styles: { fontSize: 10, cellPadding: 1 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } } })
       autoTable(doc, { startY: Math.max(doc.lastAutoTable.finalY + 10, 65), head: [['Kuvaus', 'Määrä', 'á-hinta', 'Yhteensä']], body: [[invoiceData.description || '', qty || 0, price.toFixed(2) + '€', net.toFixed(2) + '€']], theme: 'grid', headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0] }, styles: { fontSize: 10 } })
       const finalY = doc.lastAutoTable.finalY
       doc.setFontSize(10); doc.setFont(undefined, 'bold'); doc.text('Hankkeen tiedot', 14, finalY + 10)
@@ -611,7 +611,7 @@ function App() {
                   <tbody>
                     {filteredTransactions.map((t) => (
                       <tr key={t.id}>
-                        <td>{t.date_issued}</td>
+                        <td>{new Date(t.date_issued).toLocaleDateString('fi-FI')}</td>
                         <td><span className={`badge ${t.type}`}>{t.type}</span></td>
                         <td title={t.contact_name}>{t.contact_name}</td>
                         <td style={{ fontWeight: '600' }}>{t.amount_gross}</td>
