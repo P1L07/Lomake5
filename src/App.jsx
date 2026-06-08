@@ -718,6 +718,12 @@ function App() {
         <div className="modal-overlay" onClick={() => setShowTositeModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <h2>{editingId ? 'MUOKKAA TOSITETTA' : 'LISÄÄ UUSI TOSITE'}</h2>
+            {!editingId && formData.type === 'expense' && (
+              <label className="scan-btn" style={{ gridColumn: '1 / -1' }}>
+                {isScanning ? 'Scanning...' : '📷 OTA KUVA KUITISTA'}
+                <input type="file" accept="image/*,application/pdf" capture="environment" onChange={handleFileUpload} ref={fileInputRef} disabled={isScanning}/>
+              </label>
+            )}
             <form onSubmit={handleLedgerSubmit} className="form-grid">
               <div className="input-group"><label>TYYPPI</label><select name="type" value={formData.type} onChange={(e) => setFormData({...formData, type: e.target.value})} disabled={editingId}><option value="expense">MENOT</option><option value="income">TULOT</option></select></div>
               <div className="input-group"><label>KATEGORIA</label><select name="category_code" value={String(formData.category_code)} onChange={(e) => { const newCategory = e.target.value; const categoryNum = parseInt(newCategory, 10); const selectedCategory = categories.find(c => c.code === categoryNum); if (selectedCategory && selectedCategory.type === 'income') { const autoTax = INCOME_TAX_RATES[categoryNum] || 25.5; setFormData({ ...formData, category_code: newCategory, tax_rate: String(autoTax) }) } else { setFormData({ ...formData, category_code: newCategory }) } }} required>{categories.filter(c => c.type === formData.type).map(c => (<option key={c.code} value={c.code}>{c.code} - {c.name_fi}</option>))}</select></div>
