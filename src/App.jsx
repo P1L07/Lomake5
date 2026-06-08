@@ -1280,39 +1280,37 @@ const reportData = useMemo(() => {
                     <button onClick={() => handleDelete(t.id)} className="delete-btn">POISTA</button>
                     {(t.receipt_image_url || t.invoice_pdf_url) && (
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           const url = t.receipt_image_url || t.invoice_pdf_url;
-                          if (url) {
-                            // Jos URL on julkinen, päivitä se samalla taustalla
-                            if (url.includes('/object/public/')) {
-                              // Yritä luoda allekirjoitettu versio – jos epäonnistuu, avataan vanha
-                              const match = url.match(/\/public\/(?:receipts|invoices)\/([^?]+)/);
-                              if (match) {
-                                const filePath = decodeURIComponent(match[1]);
-                                const bucket = url.includes('/receipts/') ? 'receipts' : 'invoices';
-                                supabase.storage
-                                  .from(bucket)
-                                  .createSignedUrl(filePath, 1209600)
-                                  .then(({ data: signedData, error: signedError }) => {
-                                    if (!signedError) {
-                                      // Päivitä tietokanta hiljaisesti
-                                      supabase.from('transactions').update({
-                                        [bucket === 'receipts' ? 'receipt_image_url' : 'invoice_pdf_url']: signedData.signedUrl
-                                      }).eq('id', t.id);
-                                      // Päivitä paikallinen tila
-                                      setTransactions(prev => prev.map(item =>
-                                        item.id === t.id ? { ...item, receipt_image_url: signedData.signedUrl, invoice_pdf_url: signedData.signedUrl } : item
-                                      ));
-                                      window.open(signedData.signedUrl, '_blank');
-                                    } else {
-                                      // Jos allekirjoitus epäonnistuu, avataan vanha (varoittaa 404:stä)
-                                      window.open(url, '_blank');
-                                    }
-                                  });
-                                return; // poistutaan, koska async jatkuu
+                          if (!url) return;
+
+                          try {
+                            // Regex to catch both /public/ and /sign/ URLs and extract the bucket + file path
+                            const match = url.match(/\/object\/(?:public|sign)\/(receipts|invoices)\/([^?]+)/);
+
+                            if (match) {
+                              const bucket = match[1]; // 'receipts' or 'invoices'
+                              const filePath = decodeURIComponent(match[2]); // e.g. 'uuid/invoice_100.pdf'
+
+                              // Generate a fresh signed URL valid for 60 seconds (no need to save it to DB)
+                              const { data, error } = await supabase.storage
+                                .from(bucket)
+                                .createSignedUrl(filePath, 60);
+
+                              if (error) {
+                                console.error('Virhe allekirjoitetun URLin luomisessa:', error);
+                                // Fallback: try opening the original URL anyway
+                                window.open(url, '_blank');
+                              } else if (data) {
+                                // Open the freshly signed URL
+                                window.open(data.signedUrl, '_blank');
                               }
+                            } else {
+                              // If the URL doesn't match the expected Supabase format, just open it as is
+                              window.open(url, '_blank');
                             }
-                            // Muussa tapauksessa avaa sellaisenaan
+                          } catch (err) {
+                            console.error('Odottamaton virhe:', err);
                             window.open(url, '_blank');
                           }
                         }}
