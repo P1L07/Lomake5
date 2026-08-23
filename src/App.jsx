@@ -67,7 +67,12 @@ function laskeTarkistusnumero(numeroString) {
 
 
 function generoiViitenumero(laskunNumero) {
-  let pohja = String(laskunNumero).padStart(3, '0'); // varmista väh. 3 numeroa
+  // Varmista, ettei etunolla tule: lisää eteen 1, jos numero on alle 100
+  let pohja = String(laskunNumero);
+  if (pohja.length < 3) {
+    pohja = '1' + pohja; // esim. 35 -> 135
+  }
+  // Tarkistusnumero lasketaan oikealta vasemmalle painoilla 7,3,1
   const tarkiste = laskeTarkistusnumero(pohja);
   return pohja + tarkiste;
 }
