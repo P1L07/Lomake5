@@ -55,6 +55,23 @@ const INCOME_TAX_RATES = {
   3903: 0,
 }
 
+function laskeTarkistusnumero(numeroString) {
+  const digits = numeroString.replace(/\D/g, '').split('').reverse();
+  const weights = [7, 3, 1];
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    sum += parseInt(digits[i], 10) * weights[i % 3];
+  }
+  return ((10 - (sum % 10)) % 10).toString();
+}
+
+
+function generoiViitenumero(laskunNumero) {
+  let pohja = String(laskunNumero).padStart(3, '0'); // varmista väh. 3 numeroa
+  const tarkiste = laskeTarkistusnumero(pohja);
+  return pohja + tarkiste;
+}
+
 function App() {
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
@@ -460,12 +477,17 @@ function App() {
     setIsInvoiceLoading(true)
     setStatusMessage('LUON LASKUA...')
     try {
+      // Generoi viitenumero laskun numerosta
+      const generatedReference = generoiViitenumero(parseInt(invoiceData.invoice_number));
+
+      // Lasketaan summat
       const qty = parseFloat(invoiceData.quantity), price = parseFloat(invoiceData.unit_price)
       const net = qty * price, taxRate = parseFloat(invoiceData.tax_rate)
       const taxAmount = net * (taxRate / 100), gross = net + taxAmount
       const issueDate = new Date(invoiceData.date_issued), dueDate = new Date(issueDate)
       dueDate.setDate(dueDate.getDate() + 14)
       const formattedDueDate = dueDate.toISOString().split('T')[0]
+
       const safeSettings = {
         company_name: settings.company_name || 'Yritys Oy', company_address: settings.company_address || 'Osoite',
         company_phone: settings.company_phone || '', company_email: settings.company_email || '',
@@ -473,42 +495,119 @@ function App() {
         business_id: settings.business_id || '', company_vat: settings.company_vat || '',
         delay_tax_rate: settings.delay_tax_rate || '11.00'
       }
+
+      // PDF:n luonti
       const doc = new jsPDF()
       doc.setFontSize(22); doc.setFont(undefined, 'bold'); doc.text(safeSettings.company_name, 14, 20); doc.text('LASKU', 196, 20, { align: 'right' })
       doc.setFontSize(12); doc.setFont(undefined, 'normal'); doc.text(invoiceData.buyer_name || 'Asiakas', 14, 35)
       const buyerAddress = invoiceData.buyer_address || ''
       doc.text(doc.splitTextToSize(buyerAddress, 80), 14, 41)
-      autoTable(doc, { startY: 28, margin: { left: 120 }, theme: 'plain', body: [['Laskun numero', invoiceData.invoice_number || ''], ['Laskun päiväys', invoiceData.date_issued?.split('-').reverse().join('.') || ''], ['Maksuehto', '14 päivää'], ['Eräpäivä', formattedDueDate?.split('-').reverse().join('.') || ''], ['Viivästyskorko', safeSettings.delay_tax_rate + '%'], ['Viitenumero', invoiceData.reference_number || '']], styles: { fontSize: 10, cellPadding: 1 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } } })
-      autoTable(doc, { startY: Math.max(doc.lastAutoTable.finalY + 10, 65), head: [['Kuvaus', 'Määrä', 'á-hinta', 'Yhteensä']], body: [[invoiceData.description || '', qty || 0, price.toFixed(2) + '€', net.toFixed(2) + '€']], theme: 'grid', headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0] }, styles: { fontSize: 10 } })
+
+      autoTable(doc, {
+        startY: 28, margin: { left: 120 }, theme: 'plain',
+        body: [
+          ['Laskun numero', invoiceData.invoice_number || ''],
+          ['Laskun päiväys', invoiceData.date_issued?.split('-').reverse().join('.') || ''],
+          ['Maksuehto', '14 päivää'],
+          ['Eräpäivä', formattedDueDate?.split('-').reverse().join('.') || ''],
+          ['Viivästyskorko', safeSettings.delay_tax_rate + '%'],
+          ['Viitenumero', generatedReference]  // käytetään generoitua viitettä
+        ],
+        styles: { fontSize: 10, cellPadding: 1 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } }
+      })
+
+      autoTable(doc, {
+        startY: Math.max(doc.lastAutoTable.finalY + 10, 65),
+        head: [['Kuvaus', 'Määrä', 'á-hinta', 'Yhteensä']],
+        body: [[invoiceData.description || '', qty || 0, price.toFixed(2) + '€', net.toFixed(2) + '€']],
+        theme: 'grid',
+        headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0] },
+        styles: { fontSize: 10 }
+      })
+
       const finalY = doc.lastAutoTable.finalY
       doc.setFontSize(10); doc.setFont(undefined, 'bold'); doc.text('Hankkeen tiedot', 14, finalY + 10)
       doc.setFont(undefined, 'normal'); doc.text(invoiceData.project_details || '', 14, finalY + 16)
-      autoTable(doc, { startY: finalY + 10, margin: { left: 120 }, theme: 'plain', body: [['Yhteensä (alv 0%)', net.toFixed(2) + '€'], [`${taxRate.toFixed(2)}% ALV`, taxAmount.toFixed(2) + '€'], ['Maksettava yhteensä', gross.toFixed(2) + '€']], styles: { fontSize: 10, cellPadding: 1.5 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 }, 1: { halign: 'right' } } })
+
+      autoTable(doc, {
+        startY: finalY + 10, margin: { left: 120 }, theme: 'plain',
+        body: [
+          ['Yhteensä (alv 0%)', net.toFixed(2) + '€'],
+          [`${taxRate.toFixed(2)}% ALV`, taxAmount.toFixed(2) + '€'],
+          ['Maksettava yhteensä', gross.toFixed(2) + '€']
+        ],
+        styles: { fontSize: 10, cellPadding: 1.5 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 }, 1: { halign: 'right' } }
+      })
+
       const footerY = 270
       doc.setFontSize(8); doc.setTextColor(100, 100, 100)
       doc.text(`${safeSettings.company_name} | ${safeSettings.company_address}`, 105, footerY, { align: 'center' })
       doc.text(`Puh: ${safeSettings.company_phone} | Sähköposti: ${safeSettings.company_email}`, 105, footerY + 5, { align: 'center' })
       doc.text(`IBAN: ${safeSettings.company_iban} | SWIFT: ${safeSettings.company_swift}`, 105, footerY + 10, { align: 'center' })
       doc.text(`Y-tunnus: ${safeSettings.business_id} | ALV-nro: ${safeSettings.company_vat}`, 105, footerY + 15, { align: 'center' })
+
       const pdfBlob = doc.output('blob')
       const pdfFileName = `${user.id}/invoice_${invoiceData.invoice_number}_${Date.now()}.pdf`
       const { error: uploadError } = await supabase.storage.from('invoices').upload(pdfFileName, pdfBlob, { contentType: 'application/pdf', cacheControl: '3600' })
+
       let pdfUrl = null
       if (!uploadError) {
         const { data: signedData, error: signedError } = await supabase.storage.from('invoices').createSignedUrl(pdfFileName, 1209600)
-        if (!signedError) { pdfUrl = signedData.signedUrl; setLastInvoiceUrl(pdfUrl); setLastInvoiceNumber(invoiceData.invoice_number) }
-        else console.error('Signed URL error:', signedError)
-      } else console.error('Upload error:', uploadError)
-      const { error: dbError } = await supabase.from('transactions').insert([{ user_id: user.id, type: 'income', category_code: parseInt(invoiceData.income_category), contact_name: invoiceData.buyer_name, date_issued: invoiceData.date_issued, due_date: formattedDueDate, amount_gross: gross, tax_rate: taxRate, amount_net: net, status: 'unpaid', description: invoiceData.description, invoice_pdf_url: pdfUrl }])
-      await supabase.from('customers').upsert({ user_id: user.id, name: invoiceData.buyer_name, address: invoiceData.buyer_address, reference_number: invoiceData.reference_number }, { onConflict: 'user_id, name' })
+        if (!signedError) {
+          pdfUrl = signedData.signedUrl
+          setLastInvoiceUrl(pdfUrl)
+          setLastInvoiceNumber(invoiceData.invoice_number)
+        } else {
+          console.error('Signed URL error:', signedError)
+        }
+      } else {
+        console.error('Upload error:', uploadError)
+      }
+
+      // Tallenna tapahtuma tietokantaan – lisää viitenumero
+      const { error: dbError } = await supabase.from('transactions').insert([{
+        user_id: user.id,
+        type: 'income',
+        category_code: parseInt(invoiceData.income_category),
+        contact_name: invoiceData.buyer_name,
+        date_issued: invoiceData.date_issued,
+        due_date: formattedDueDate,
+        amount_gross: gross,
+        tax_rate: taxRate,
+        amount_net: net,
+        status: 'unpaid',
+        description: invoiceData.description,
+        invoice_pdf_url: pdfUrl,
+        reference_number: generatedReference   // <-- lisätty
+      }])
+
+      // Päivitä asiakkaan perustiedot (ei viitenumeroa)
+      await supabase.from('customers').upsert({
+        user_id: user.id,
+        name: invoiceData.buyer_name,
+        address: invoiceData.buyer_address
+        // reference_number jätetään pois, koska se ei ole asiakaskohtainen
+      }, { onConflict: 'user_id, name' })
+
       const nextNum = parseInt(invoiceData.invoice_number) + 1
       await saveSettings({ next_invoice_number: nextNum })
       resetInvoiceForm(nextNum)
+
       if (pdfUrl) window.open(pdfUrl, '_blank')
-      if (!dbError) { fetchTransactions(); setStatusMessage('LASKU VALMIS'); setTimeout(() => setStatusMessage(''), 3000) }
-      else setStatusMessage('VIRHE: ' + dbError.message)
-    } catch (err) { setStatusMessage('VIRHE: ' + err.message) }
-    finally { setIsInvoiceLoading(false) }
+      if (!dbError) {
+        fetchTransactions()
+        setStatusMessage('LASKU VALMIS')
+        setTimeout(() => setStatusMessage(''), 3000)
+      } else {
+        setStatusMessage('VIRHE: ' + dbError.message)
+      }
+    } catch (err) {
+      setStatusMessage('VIRHE: ' + err.message)
+    } finally {
+      setIsInvoiceLoading(false)
+    }
   }
 
   const reportData = useMemo(() => {
