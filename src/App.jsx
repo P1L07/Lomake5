@@ -55,6 +55,178 @@ const INCOME_TAX_RATES = {
   3903: 0,
 }
 
+// ===== CSV-tuonnin apufunktiot =====
+
+// Jäsennä yksi CSV-rivi (tukee lainausmerkkejä ja valittua erotinta)
+function parseCsvLine(line, delimiter) {
+  const result = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++ }
+      else if (ch === '"') inQuotes = false
+      else current += ch
+    } else {
+      if (ch === '"') inQuotes = true
+      else if (ch === delimiter) { result.push(current); current = '' }
+      else current += ch
+    }
+  }
+  result.push(current)
+  return result.map(s => s.trim())
+}
+
+// Tunnista erotinmerkki ensimmäiseltä riviltä
+function detectDelimiter(line) {
+  const candidates = [';', ',', '\t', '|']
+  let best = ','
+  let bestCount = 0
+  for (const d of candidates) {
+    const count = line.split(d).length
+    if (count > bestCount) { bestCount = count; best = d }
+  }
+  return best
+}
+
+// Normalisoi otsikko vertailua varten (poistaa erikoismerkit)
+function normalizeHeader(h) {
+  return String(h || '').toLowerCase().trim().replace(/[^a-zä-öå0-9]/g, '')
+}
+
+// Tunnista sarakkeiden indeksit otsikkoriviltä
+function detectColumns(headers) {
+  const norm = headers.map(normalizeHeader)
+  const find = (candidates) => {
+    for (const c of candidates) {
+      const i = norm.findIndex(h => h === c)
+      if (i >= 0) return i
+    }
+    for (const c of candidates) {
+      const i = norm.findIndex(h => h.includes(c))
+      if (i >= 0) return i
+    }
+    return -1
+  }
+  return {
+    date: find(['kirjauspäivä', 'tapahtumapäivä', 'maksupäivä', 'päivämäärä', 'date', 'bookingdate']),
+    amount: find(['summa', 'määrä', 'amount', 'maksunmäärä']),
+    name: find(['saajamaksaja', 'saaja', 'maksaja', 'nimi', 'name', 'recipient']),
+    message: find(['viesti', 'selite', 'kuvaus', 'message', 'description']),
+  }
+}
+
+// Jäsennä summa (tukee pilkkua/pistettä desimaalierottimena, €-symbolia, sulkuja)
+function parseCsvAmount(str) {
+  if (str == null) return NaN
+  let s = String(str).trim()
+  if (!s) return NaN
+  s = s.replace(/[€$£\s\u00A0]/g, '')
+  let negative = false
+  if (s.startsWith('(') && s.endsWith(')')) { negative = true; s = s.slice(1, -1) }
+  if (s.startsWith('-')) { negative = true; s = s.slice(1) }
+  const lastComma = s.lastIndexOf(',')
+  const lastDot = s.lastIndexOf('.')
+  if (lastComma > lastDot) {
+    s = s.replace(/\./g, '').replace(',', '.')
+  } else {
+    s = s.replace(/,/g, '')
+  }
+  const num = parseFloat(s)
+  if (isNaN(num)) return NaN
+  return negative ? -num : num
+}
+
+// Jäsennä päivämäärä muotoon YYYY-MM-DD
+function parseCsvDate(str) {
+  if (!str) return null
+  const s = String(str).trim()
+  let m = s.match(/^(\d{1,2})[\.\/\-](\d{1,2})[\.\/\-](\d{2,4})/)
+  if (m) {
+    let [, d, mo, y] = m
+    if (y.length === 2) y = '20' + y
+    return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
+  }
+  m = s.match(/^(\d{4})[\.\/\-](\d{1,2})[\.\/\-](\d{1,2})/)
+  if (m) {
+    const [, y, mo, d] = m
+    return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
+  }
+  return null
+}
+
+// Normalisoi nimi vertailua varten
+function normalizeName(s) {
+  return String(s || '').toLowerCase().trim().replace(/\s+/g, ' ').replace(/[.,]/g, '')
+}
+
+// Lue tiedosto tekstinä (UTF-8 ensin, fallback Latin-1)
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const buffer = reader.result
+      let text = new TextDecoder('utf-8', { fatal: false }).decode(buffer)
+      const bad = (text.match(/\uFFFD/g) || []).length
+      if (bad > 3) text = new TextDecoder('iso-8859-1').decode(buffer)
+      resolve(text)
+    }
+    reader.onerror = reject
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+// Vertaile CSV-rivejä sovelluksen tapahtumiin
+function compareCsvToTransactions(csvRows, transactions) {
+  const matchedIds = new Set()
+  const results = csvRows.map(row => {
+    // Pankin negatiivinen = meno, positiivinen = tulo
+    const expectedType = row.amount < 0 ? 'expense' : 'income'
+    const absAmount = Math.abs(row.amount)
+
+    // 1) Tarkka osuma: päivä + summa + nimi
+    let tx = transactions.find(t =>
+      !matchedIds.has(t.id) &&
+      t.date_issued === row.date &&
+      t.type === expectedType &&
+      Math.abs(parseFloat(t.amount_gross) - absAmount) < 0.01 &&
+      normalizeName(t.contact_name) === normalizeName(row.name)
+    )
+    if (tx) { matchedIds.add(tx.id); return { type: 'exact', csv: row, tx } }
+
+    // 2) Sama päivä + summa, eri nimi
+    tx = transactions.find(t =>
+      !matchedIds.has(t.id) &&
+      t.date_issued === row.date &&
+      t.type === expectedType &&
+      Math.abs(parseFloat(t.amount_gross) - absAmount) < 0.01
+    )
+    if (tx) { matchedIds.add(tx.id); return { type: 'name_mismatch', csv: row, tx } }
+
+    // 3) Sama päivä + nimi, eri summa
+    tx = transactions.find(t =>
+      !matchedIds.has(t.id) &&
+      t.date_issued === row.date &&
+      normalizeName(t.contact_name) === normalizeName(row.name)
+    )
+    if (tx) { matchedIds.add(tx.id); return { type: 'amount_mismatch', csv: row, tx } }
+
+    // 4) Vain summa täsmää
+    tx = transactions.find(t =>
+      !matchedIds.has(t.id) &&
+      Math.abs(parseFloat(t.amount_gross) - absAmount) < 0.01
+    )
+    if (tx) { matchedIds.add(tx.id); return { type: 'partial', csv: row, tx } }
+
+    // 5) Ei osumaa
+    return { type: 'missing', csv: row }
+  })
+
+  const unmatchedApp = transactions.filter(t => !matchedIds.has(t.id))
+  return { results, unmatchedApp }
+}
+
 function laskeTarkistusnumero(numeroString) {
   const digits = numeroString.replace(/\D/g, '').split('').reverse();
   const weights = [7, 3, 1];
@@ -82,6 +254,13 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [showTositeModal, setShowTositeModal] = useState(false)
+  // CSV-tuonnin tila
+  const [showCsvImportModal, setShowCsvImportModal] = useState(false)
+  const [csvParsing, setCsvParsing] = useState(false)
+  const [csvRows, setCsvRows] = useState([])
+  const [csvComparison, setCsvComparison] = useState(null)
+  const [csvFileName, setCsvFileName] = useState('')
+  const [csvError, setCsvError] = useState('')
   const [activeTab, setActiveTab] = useState('ledger')
   const [statusMessage, setStatusMessage] = useState('')
   const [transactions, setTransactions] = useState([])
@@ -460,6 +639,92 @@ function App() {
     fetchTransactions()
   }
 
+  // CSV-tiedoston lataus ja jäsentäminen
+  const handleCsvFileUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvParsing(true)
+    setCsvError('')
+    try {
+      const text = await readFileAsText(file)
+      const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0)
+      if (lines.length < 2) {
+        setCsvError('CSV-tiedosto näyttää tyhjältä tai siitä puuttuu otsikkorivi.')
+        setCsvParsing(false)
+        return
+      }
+
+      const delimiter = detectDelimiter(lines[0])
+      const headers = parseCsvLine(lines[0], delimiter)
+      const cols = detectColumns(headers)
+
+      if (cols.date < 0 || cols.amount < 0 || cols.name < 0) {
+        setCsvError(`Sarakkeita ei tunnistettu. Otsikot: ${headers.join(', ')}`)
+        setCsvParsing(false)
+        return
+      }
+
+      const rows = []
+      for (let i = 1; i < lines.length; i++) {
+        const cells = parseCsvLine(lines[i], delimiter)
+        const date = parseCsvDate(cells[cols.date])
+        const amount = parseCsvAmount(cells[cols.amount])
+        const name = (cells[cols.name] || '').trim()
+        const message = cols.message >= 0 ? (cells[cols.message] || '').trim() : ''
+        if (!date || isNaN(amount)) continue
+        rows.push({ date, amount, name, message })
+      }
+
+      if (rows.length === 0) {
+        setCsvError('Tiedostosta ei löytynyt yhtään kelvollista tapahtumaa.')
+        setCsvParsing(false)
+        return
+      }
+
+      setCsvRows(rows)
+      setCsvFileName(file.name)
+    } catch (err) {
+      setCsvError('Virhe tiedoston lukemisessa: ' + err.message)
+    } finally {
+      setCsvParsing(false)
+      if (e.target) e.target.value = ''
+    }
+  }
+
+  // Päivitä sovelluksen tapahtuman nimi pankin nimeksi (vain käyttäjän vahvistuksella)
+  const handleCsvUpdateName = async (txId, newName) => {
+    if (!window.confirm(`Päivitetäänkö sovelluksen tapahtuman nimeksi "${newName}"?`)) return
+    const { error } = await supabase.from('transactions').update({ contact_name: newName }).eq('id', txId)
+    if (error) alert('Virhe: ' + error.message)
+    else fetchTransactions()
+  }
+
+  // Luo uusi tosite CSV-rivistä (avataan tosite-modaali esitäytetyillä tiedoilla)
+  const handleCsvCreateTx = (row) => {
+    const isExpense = row.amount < 0
+    setFormData({
+      type: isExpense ? 'expense' : 'income',
+      category_code: isExpense ? 346 : 3001,
+      contact_name: row.name,
+      date_issued: row.date,
+      amount_gross: Math.abs(row.amount).toFixed(2),
+      tax_rate: String(isExpense ? (settings.default_tax_rate || 25.5) : (INCOME_TAX_RATES[3001] || 25.5)),
+      y_tunnus: '',
+      receipt_url: null,
+    })
+    setEditingId(null)
+    setShowTositeModal(true)
+  }
+
+  // Sulje CSV-modaali ja nollaa tila
+  const handleCsvClose = () => {
+    setShowCsvImportModal(false)
+    setCsvRows([])
+    setCsvComparison(null)
+    setCsvFileName('')
+    setCsvError('')
+  }
+
   const handleStatusToggle = async (t) => {
     if (t.type === 'expense') { alert('Kuitit merkataan aina maksetuksi'); return }
     if (t.status === 'unpaid') {
@@ -649,6 +914,15 @@ function App() {
     return { vatToPay: totalVatCollected - totalVatPaid, totalVatCollected, totalVatPaid, totalIncomeNet, totalExpenseNet, profit: totalIncomeNet - totalExpenseNet, alvSalesTax, zeroTaxSalesNet, expensesByCategory, euSalesGoods, euSalesServices, euPurchasesGoods, euPurchasesServices, importGoods, reverseChargeSales, reverseChargePurchases }
   }, [transactions, reportYear, effectivePeriod])
 
+  // Vertailu päivittyy automaattisesti, kun tapahtumat tai CSV-rivit muuttuvat
+  useEffect(() => {
+    if (csvRows.length > 0) {
+      setCsvComparison(compareCsvToTransactions(csvRows, transactions))
+    } else {
+      setCsvComparison(null)
+    }
+  }, [csvRows, transactions])
+
   const availableYears = useMemo(() => {
     const years = new Set(); const currentYear = new Date().getFullYear()
     transactions.forEach(t => { const dateStr = (t.status === 'paid' && t.date_paid) ? t.date_paid : t.date_issued; if (dateStr) { const year = new Date(dateStr).getFullYear(); if (!isNaN(year)) years.add(year) } })
@@ -682,7 +956,7 @@ function App() {
             <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</button>
           </div>
         <nav className="sidebar-nav">
-          <button className={activeTab === 'ledger' ? 'active' : ''} onClick={() => setActiveTab('ledger')}><span className="nav-text">TOSITTEET</span></button>
+          <button className={activeTab === 'ledger' ? 'active' : ''} onClick={() => setActiveTab('ledger')}><span className="nav-text">TAPAHTUMAT</span></button>
           <button className={activeTab === 'reports' ? 'active' : ''} onClick={() => setActiveTab('reports')}><span className="nav-text">VERO</span></button>
           <button className={activeTab === 'invoice' ? 'active' : ''} onClick={() => setActiveTab('invoice')}><span className="nav-text">UUSI LASKU</span></button>
           <button className={activeTab === 'customers' ? 'active' : ''} onClick={() => setActiveTab('customers')}><span className="nav-text">ASIAKKAAT</span></button>
@@ -698,9 +972,24 @@ function App() {
         {activeTab === 'ledger' && (
           <>
             <div className="ledger-fullscreen">
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-                <h2>TOSITTEET</h2>
-                <button className="submit-btn" style={{ width: 'auto' }} onClick={() => { setEditingId(null); cancelEdit(); setShowTositeModal(true); }}>+ LISÄÄ UUSI TOSITE</button>
+              <div style={{ display: 'flex', gap: '10px', marginBottom: 16, justifyContent: 'space-between' }}>
+                <h2>TAPAHTUMAT</h2>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    className="submit-btn"
+                    style={{ width: 'auto' }}
+                    onClick={() => { setEditingId(null); cancelEdit(); setShowTositeModal(true); }}
+                  >
+                    + LISÄÄ UUSI TOSITE
+                  </button>
+                  <button
+                    className="submit-btn"
+                    style={{ width: 'auto', backgroundColor: '#6366f1' }}
+                    onClick={() => setShowCsvImportModal(true)}
+                  >
+                    📄 LATAA .CSV
+                  </button>
+                </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                 <h3 style={{ margin: 0 }}>TAPAHTUMAT</h3>
@@ -801,7 +1090,228 @@ function App() {
             <div className="table-container"><table className="transactions-table"><thead><tr><th>NIMI</th><th>OSOITE</th><th>Y-TUNNUS</th><th>SÄHKÖPOSTI</th><th>PUHELIN</th><th>VIITENUMERO</th><th>TOIMINNOT</th></tr></thead><tbody>{customers.length === 0 ? (<tr><td colSpan="7" style={{ textAlign: 'center', padding: '20px' }}>Ei asiakkaita. Lisää uusi asiakas.</td></tr>) : (customers.map(customer => (<tr key={customer.id}><td>{customer.name}</td><td style={{ whiteSpace: 'pre-line' }}>{customer.address || '-'}</td><td>{customer.y_tunnus || '-'}</td><td>{customer.email || '-'}</td><td>{customer.phone || '-'}</td><td>{customer.reference_number || '-'}</td><td><div className="action-cell"><button className="edit-btn" onClick={() => { setEditingCustomer(customer); setNewCustomer({ name: customer.name || '', address: customer.address || '', y_tunnus: customer.y_tunnus || '', email: customer.email || '', phone: customer.phone || '', reference_number: customer.reference_number || '' }); setShowCustomerModal(true) }}>Muokkaa</button><button className="delete-btn" onClick={async () => { if (!window.confirm(`Poistetaanko asiakas "${customer.name}"?`)) return; const { error } = await supabase.from('customers').delete().eq('id', customer.id); if (!error) { fetchCustomers(); if (invoiceData.selectedCustomerId === customer.id) { setInvoiceData({ ...invoiceData, selectedCustomerId: '', buyer_name: '', buyer_address: '', reference_number: '' }) } } else { alert('Virhe poistossa: ' + error.message) } }}>Poista</button></div></td></tr>)))}</tbody></table></div></div>
         )}
       </main>
+      {showCsvImportModal && (
+        <div className="modal-overlay" onClick={handleCsvClose}>
+          <div
+            className="modal-content"
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: '1100px', width: '95%', maxHeight: '90vh', overflowY: 'auto' }}
+          >
+            <h2>PANKKIOTTEEN TUONTI (.CSV)</h2>
 
+            <p style={{ color: 'var(--text-muted)', marginBottom: '16px', fontSize: '0.9rem' }}>
+              Valitse pankin CSV-tiedosto. Ohjelma vertailee tapahtumia sovellukseen —{' '}
+              <strong>mitään ei muuteta automaattisesti</strong>. Tarkista ehdotukset ja tee muutokset itse.
+            </p>
+
+            <label className="scan-btn" style={{ display: 'block', textAlign: 'center', cursor: 'pointer', marginBottom: '16px' }}>
+              {csvParsing ? 'Luetaan...' : csvFileName ? `📄 ${csvFileName} — vaihda tiedosto` : '📄 VALITSE CSV-TIEDOSTO'}
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleCsvFileUpload}
+                disabled={csvParsing}
+                style={{ display: 'none' }}
+              />
+            </label>
+
+            {csvError && (
+              <div style={{
+                padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                color: '#ef4444', borderRadius: '6px', marginBottom: '16px', fontSize: '0.9rem'
+              }}>
+                {csvError}
+              </div>
+            )}
+
+            {csvComparison && (
+              <>
+                {/* Yhteenveto */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                  gap: '10px', marginBottom: '20px'
+                }}>
+                  {[
+                    { label: 'CSV-rivit', value: csvComparison.results.length, color: '#6b7280' },
+                    { label: 'Täsmää', value: csvComparison.results.filter(r => r.type === 'exact').length, color: '#10b981' },
+                    { label: 'Nimi eroaa', value: csvComparison.results.filter(r => r.type === 'name_mismatch').length, color: '#f59e0b' },
+                    { label: 'Summa eroaa', value: csvComparison.results.filter(r => r.type === 'amount_mismatch').length, color: '#f59e0b' },
+                    { label: 'Osittainen', value: csvComparison.results.filter(r => r.type === 'partial').length, color: '#f59e0b' },
+                    { label: 'Puuttuu sovelluksesta', value: csvComparison.results.filter(r => r.type === 'missing').length, color: '#ef4444' },
+                    { label: 'Vain sovelluksessa', value: csvComparison.unmatchedApp.length, color: '#6366f1' },
+                  ].map((s, i) => (
+                    <div key={i} style={{
+                      padding: '10px 12px',
+                      backgroundColor: 'var(--bg-main)',
+                      borderRadius: '8px',
+                      borderLeft: `3px solid ${s.color}`
+                    }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>
+                        {s.label}
+                      </div>
+                      <div style={{ fontSize: '1.4rem', fontWeight: 700, color: s.color }}>{s.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Tulokset */}
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="transactions-table" style={{ fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr>
+                        <th>TILA</th>
+                        <th>PANKKI</th>
+                        <th>SOVELLUS</th>
+                        <th>EHDOTETUT TOIMENPITEET</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {csvComparison.results.map((r, i) => {
+                        const statusMap = {
+                          exact: { label: 'TÄSMÄÄ', color: '#10b981' },
+                          name_mismatch: { label: 'NIMI EROAA', color: '#f59e0b' },
+                          amount_mismatch: { label: 'SUMMA EROAA', color: '#f59e0b' },
+                          partial: { label: 'OSITTAINEN', color: '#f59e0b' },
+                          missing: { label: 'PUUTTUU', color: '#ef4444' },
+                        }
+                        const st = statusMap[r.type]
+                        const bgColor = r.type === 'exact'
+                          ? 'rgba(16, 185, 129, 0.05)'
+                          : r.type === 'missing'
+                            ? 'rgba(239, 68, 68, 0.05)'
+                            : 'rgba(245, 158, 11, 0.05)'
+
+                        return (
+                          <tr key={i} style={{ backgroundColor: bgColor }}>
+                            <td>
+                              <span style={{
+                                display: 'inline-block', padding: '3px 8px', borderRadius: '4px',
+                                fontSize: '0.7rem', fontWeight: 700,
+                                backgroundColor: st.color + '22', color: st.color
+                              }}>
+                                {st.label}
+                              </span>
+                            </td>
+                            <td>
+                              <div style={{ fontWeight: 600 }}>{r.csv.name || '—'}</div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                {r.csv.date} · {r.csv.amount.toFixed(2)} €
+                              </div>
+                              {r.csv.message && (
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                  {r.csv.message}
+                                </div>
+                              )}
+                            </td>
+                            <td>
+                              {r.tx ? (
+                                <>
+                                  <div style={{ fontWeight: 600 }}>{r.tx.contact_name}</div>
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                    {r.tx.date_issued} · {r.tx.amount_gross} € ({r.tx.type})
+                                  </div>
+                                </>
+                              ) : (
+                                <span style={{ color: 'var(--text-muted)' }}>— ei vastausta —</span>
+                              )}
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.75rem' }}>
+                                {r.type === 'exact' && (
+                                  <span style={{ color: '#10b981' }}>✓ Ei toimenpiteitä</span>
+                                )}
+                                {r.type === 'name_mismatch' && (
+                                  <>
+                                    <span style={{ color: 'var(--text-muted)' }}>
+                                      Sama päivä ja summa, eri nimi. Tarkista kumpi on oikein.
+                                    </span>
+                                    <button
+                                      className="edit-btn"
+                                      onClick={() => handleCsvUpdateName(r.tx.id, r.csv.name)}
+                                      style={{ alignSelf: 'flex-start' }}
+                                    >
+                                      Päivitä sovelluksen nimi → "{r.csv.name}"
+                                    </button>
+                                  </>
+                                )}
+                                {r.type === 'amount_mismatch' && (
+                                  <span style={{ color: 'var(--text-muted)' }}>
+                                    Sama päivä ja nimi, mutta summa eroaa. Tarkista tosite.
+                                  </span>
+                                )}
+                                {r.type === 'partial' && (
+                                  <span style={{ color: 'var(--text-muted)' }}>
+                                    Vain summa täsmää — varmista, että kyseessä on sama tapahtuma.
+                                  </span>
+                                )}
+                                {r.type === 'missing' && (
+                                  <>
+                                    <span style={{ color: 'var(--text-muted)' }}>
+                                      Ei löydy sovelluksesta. Ehdotus:{' '}
+                                      <strong>{r.csv.amount < 0 ? 'meno' : 'tulo'}</strong>
+                                    </span>
+                                    <button
+                                      className="edit-btn"
+                                      onClick={() => handleCsvCreateTx(r.csv)}
+                                      style={{ alignSelf: 'flex-start' }}
+                                    >
+                                      + Luo uusi tosite
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Sovelluksessa mutta ei pankissa */}
+                {csvComparison.unmatchedApp.length > 0 && (
+                  <div style={{ marginTop: '28px' }}>
+                    <h3 style={{ fontSize: '1rem', marginBottom: '10px' }}>
+                      Sovelluksessa, mutta ei pankkiotteella ({csvComparison.unmatchedApp.length})
+                    </h3>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                      Nämä tapahtumat on kirjattu sovellukseen, mutta niitä ei löytynyt valitusta CSV-tiedostosta.
+                    </p>
+                    <div style={{
+                      maxHeight: '250px', overflowY: 'auto',
+                      border: '1px solid var(--border-color, #e5e7eb)', borderRadius: '6px'
+                    }}>
+                      <table className="transactions-table" style={{ fontSize: '0.8rem' }}>
+                        <thead>
+                          <tr><th>PÄIVÄ</th><th>TYYPPI</th><th>NIMI</th><th>SUMMA</th><th>TILANNE</th></tr>
+                        </thead>
+                        <tbody>
+                          {csvComparison.unmatchedApp.map(t => (
+                            <tr key={t.id}>
+                              <td>{t.date_issued}</td>
+                              <td><span className={`badge ${t.type}`}>{t.type}</span></td>
+                              <td>{t.contact_name}</td>
+                              <td>{t.amount_gross} €</td>
+                              <td><span className={`badge ${t.status}`}>{t.status}</span></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '10px', marginTop: '24px' }}>
+                  <button className="submit-btn" style={{ flex: 1 }} onClick={handleCsvClose}>
+                    SULJE
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       {showCustomerModal && (
         <div className="modal-overlay" onClick={() => { setShowCustomerModal(false); setEditingCustomer(null); setNewCustomer({ name: '', address: '', y_tunnus: '', email: '', phone: '', reference_number: '' }) }}>
           <div className="modal-content" onClick={e => e.stopPropagation()}><h3>{editingCustomer ? 'MUOKKAA' : 'UUSI ASIAKAS'}</h3>

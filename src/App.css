@@ -541,4 +541,16 @@ textarea { resize: vertical; }
   }
 }
 
+/* CSV-tuonnin taulukon rivien hover */
+.transactions-table tbody tr:hover {
+  background-color: rgba(99, 102, 241, 0.04) !important;
+}
 
+/* CSV-modaalin scrollbar */
+.modal-content::-webkit-scrollbar {
+  width: 8px;
+}
+.modal-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
