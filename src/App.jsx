@@ -223,8 +223,27 @@ function compareCsvToTransactions(csvRows, transactions) {
     return { type: 'missing', csv: row }
   })
 
-  const unmatchedApp = transactions.filter(t => !matchedIds.has(t.id))
-  return { results, unmatchedApp }
+  // Laske CSV:n aikaväli
+  const dates = csvRows.map(r => r.date).filter(Boolean).sort()
+  const minDate = dates[0]
+  const maxDate = dates[dates.length - 1]
+  // Vain ne sovelluksen tapahtumat, jotka osuvat CSV:n aikavälille
+  // ja joita ei ole vielä yhdistetty CSV-riviin
+  const bufferDays = 1 // salli ±1 päivä
+  const minDateObj = new Date(minDate)
+  minDateObj.setDate(minDateObj.getDate() - bufferDays)
+  const maxDateObj = new Date(maxDate)
+  maxDateObj.setDate(maxDateObj.getDate() + bufferDays)
+  const minDateBuffered = minDateObj.toISOString().split('T')[0]
+  const maxDateBuffered = maxDateObj.toISOString().split('T')[0]
+
+  const unmatchedApp = transactions.filter(t =>
+    !matchedIds.has(t.id) &&
+    t.date_issued >= minDateBuffered &&
+    t.date_issued <= maxDateBuffered
+  )
+
+  return { results, unmatchedApp, dateRange: { minDate, maxDate } }
 }
 
 function laskeTarkistusnumero(numeroString) {
@@ -984,7 +1003,7 @@ function App() {
                   </button>
                   <button
                     className="submit-btn"
-                    style={{ width: 'auto', backgroundColor: '#6366f1' }}
+                    style={{ width: 'auto'}}
                     onClick={() => setShowCsvImportModal(true)}
                   >
                     📄 LATAA .CSV
@@ -1092,11 +1111,7 @@ function App() {
       </main>
       {showCsvImportModal && (
         <div className="modal-overlay" onClick={handleCsvClose}>
-          <div
-            className="modal-content"
-            onClick={e => e.stopPropagation()}
-            style={{ maxWidth: '1100px', width: '95%', maxHeight: '90vh', overflowY: 'auto' }}
-          >
+          <div className="modal-content csv-modal" onClick={e => e.stopPropagation()}>
             <h2>PANKKIOTTEEN TUONTI (.CSV)</h2>
 
             <p style={{ color: 'var(--text-muted)', marginBottom: '16px', fontSize: '0.9rem' }}>
@@ -1104,34 +1119,29 @@ function App() {
               <strong>mitään ei muuteta automaattisesti</strong>. Tarkista ehdotukset ja tee muutokset itse.
             </p>
 
-            <label className="scan-btn" style={{ display: 'block', textAlign: 'center', cursor: 'pointer', marginBottom: '16px' }}>
+            <label className="scan-btn" style={{ cursor: 'pointer', marginBottom: '16px' }}>
               {csvParsing ? 'Luetaan...' : csvFileName ? `📄 ${csvFileName} — vaihda tiedosto` : '📄 VALITSE CSV-TIEDOSTO'}
               <input
                 type="file"
                 accept=".csv,text/csv"
                 onChange={handleCsvFileUpload}
                 disabled={csvParsing}
-                style={{ display: 'none' }}
               />
             </label>
 
-            {csvError && (
-              <div style={{
-                padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                color: '#ef4444', borderRadius: '6px', marginBottom: '16px', fontSize: '0.9rem'
-              }}>
-                {csvError}
-              </div>
-            )}
+            {csvError && <div className="csv-error">{csvError}</div>}
 
             {csvComparison && (
               <>
-                {/* Yhteenveto */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                  gap: '10px', marginBottom: '20px'
-                }}>
+                {csvComparison.dateRange?.minDate && (
+                  <div className="csv-daterange">
+                    📅 CSV:n aikaväli: <strong>{csvComparison.dateRange.minDate}</strong> –{' '}
+                    <strong>{csvComparison.dateRange.maxDate}</strong>
+                    {' · '}Vertailu rajattu tähän aikaväliin.
+                  </div>
+                )}
+
+                <div className="csv-summary">
                   {[
                     { label: 'CSV-rivit', value: csvComparison.results.length, color: '#6b7280' },
                     { label: 'Täsmää', value: csvComparison.results.filter(r => r.type === 'exact').length, color: '#10b981' },
@@ -1141,23 +1151,19 @@ function App() {
                     { label: 'Puuttuu sovelluksesta', value: csvComparison.results.filter(r => r.type === 'missing').length, color: '#ef4444' },
                     { label: 'Vain sovelluksessa', value: csvComparison.unmatchedApp.length, color: '#6366f1' },
                   ].map((s, i) => (
-                    <div key={i} style={{
-                      padding: '10px 12px',
-                      backgroundColor: 'var(--bg-main)',
-                      borderRadius: '8px',
-                      borderLeft: `3px solid ${s.color}`
-                    }}>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>
-                        {s.label}
-                      </div>
-                      <div style={{ fontSize: '1.4rem', fontWeight: 700, color: s.color }}>{s.value}</div>
+                    <div
+                      key={i}
+                      className="csv-summary-card"
+                      style={{ borderLeft: `3px solid ${s.color}` }}
+                    >
+                      <div className="label">{s.label}</div>
+                      <div className="value" style={{ color: s.color }}>{s.value}</div>
                     </div>
                   ))}
                 </div>
 
-                {/* Tulokset */}
                 <div style={{ overflowX: 'auto' }}>
-                  <table className="transactions-table" style={{ fontSize: '0.85rem' }}>
+                  <table className="csv-table">
                     <thead>
                       <tr>
                         <th>TILA</th>
@@ -1185,11 +1191,10 @@ function App() {
                         return (
                           <tr key={i} style={{ backgroundColor: bgColor }}>
                             <td>
-                              <span style={{
-                                display: 'inline-block', padding: '3px 8px', borderRadius: '4px',
-                                fontSize: '0.7rem', fontWeight: 700,
-                                backgroundColor: st.color + '22', color: st.color
-                              }}>
+                              <span
+                                className="csv-status"
+                                style={{ backgroundColor: st.color + '22', color: st.color }}
+                              >
                                 {st.label}
                               </span>
                             </td>
@@ -1217,44 +1222,36 @@ function App() {
                               )}
                             </td>
                             <td>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.75rem' }}>
+                              <div className="csv-actions">
                                 {r.type === 'exact' && (
-                                  <span style={{ color: '#10b981' }}>✓ Ei toimenpiteitä</span>
+                                  <p>✓ Ei toimenpiteitä</p>
                                 )}
                                 {r.type === 'name_mismatch' && (
                                   <>
-                                    <span style={{ color: 'var(--text-muted)' }}>
-                                      Sama päivä ja summa, eri nimi. Tarkista kumpi on oikein.
-                                    </span>
+                                    <p>Sama päivä ja summa, eri nimi. Tarkista kumpi on oikein.</p>
                                     <button
-                                      className="edit-btn"
+                                      className="csv-action-btn"
                                       onClick={() => handleCsvUpdateName(r.tx.id, r.csv.name)}
-                                      style={{ alignSelf: 'flex-start' }}
                                     >
                                       Päivitä sovelluksen nimi → "{r.csv.name}"
                                     </button>
                                   </>
                                 )}
                                 {r.type === 'amount_mismatch' && (
-                                  <span style={{ color: 'var(--text-muted)' }}>
-                                    Sama päivä ja nimi, mutta summa eroaa. Tarkista tosite.
-                                  </span>
+                                  <p>Sama päivä ja nimi, mutta summa eroaa. Tarkista tosite.</p>
                                 )}
                                 {r.type === 'partial' && (
-                                  <span style={{ color: 'var(--text-muted)' }}>
-                                    Vain summa täsmää — varmista, että kyseessä on sama tapahtuma.
-                                  </span>
+                                  <p>Vain summa täsmää — varmista, että kyseessä on sama tapahtuma.</p>
                                 )}
                                 {r.type === 'missing' && (
                                   <>
-                                    <span style={{ color: 'var(--text-muted)' }}>
+                                    <p>
                                       Ei löydy sovelluksesta. Ehdotus:{' '}
                                       <strong>{r.csv.amount < 0 ? 'meno' : 'tulo'}</strong>
-                                    </span>
+                                    </p>
                                     <button
-                                      className="edit-btn"
+                                      className="csv-action-btn create"
                                       onClick={() => handleCsvCreateTx(r.csv)}
-                                      style={{ alignSelf: 'flex-start' }}
                                     >
                                       + Luo uusi tosite
                                     </button>
@@ -1269,22 +1266,24 @@ function App() {
                   </table>
                 </div>
 
-                {/* Sovelluksessa mutta ei pankissa */}
                 {csvComparison.unmatchedApp.length > 0 && (
-                  <div style={{ marginTop: '28px' }}>
-                    <h3 style={{ fontSize: '1rem', marginBottom: '10px' }}>
-                      Sovelluksessa, mutta ei pankkiotteella ({csvComparison.unmatchedApp.length})
-                    </h3>
-                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
-                      Nämä tapahtumat on kirjattu sovellukseen, mutta niitä ei löytynyt valitusta CSV-tiedostosta.
+                  <div className="csv-unmatched">
+                    <h3>Sovelluksessa, mutta ei pankkiotteella ({csvComparison.unmatchedApp.length})</h3>
+                    <p className="hint">
+                      Tapahtumat, jotka on kirjattu sovellukseen aikavälillä{' '}
+                      <strong>{csvComparison.dateRange.minDate} – {csvComparison.dateRange.maxDate}</strong>{' '}
+                      mutta joita ei löytynyt CSV-tiedostosta.
                     </p>
-                    <div style={{
-                      maxHeight: '250px', overflowY: 'auto',
-                      border: '1px solid var(--border-color, #e5e7eb)', borderRadius: '6px'
-                    }}>
-                      <table className="transactions-table" style={{ fontSize: '0.8rem' }}>
+                    <div className="csv-unmatched-scroll">
+                      <table className="csv-table">
                         <thead>
-                          <tr><th>PÄIVÄ</th><th>TYYPPI</th><th>NIMI</th><th>SUMMA</th><th>TILANNE</th></tr>
+                          <tr>
+                            <th>PÄIVÄ</th>
+                            <th>TYYPPI</th>
+                            <th>NIMI</th>
+                            <th>SUMMA</th>
+                            <th>TILANNE</th>
+                          </tr>
                         </thead>
                         <tbody>
                           {csvComparison.unmatchedApp.map(t => (
