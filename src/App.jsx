@@ -378,6 +378,10 @@ function VeroVisuals({ transactions, categories, reportYear, effectivePeriod }) 
       {/* Yhteenveto: tulot vs menot */}
       <div className="report-card">
         <h3>Taloudellinen tilanne</h3>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+          Tulot lasketaan mukaan vasta kun ne on merkitty maksetuiksi (maksupäivän mukaan).
+          Menot kirjataan niiden päivämäärän mukaan.
+        </p>
         <div style={{ display: 'flex', gap: '24px', marginBottom: '20px', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: '140px' }}>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Tulot</div>
@@ -513,6 +517,8 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [showTositeModal, setShowTositeModal] = useState(false)
+  const [showTositeConfirm, setShowTositeConfirm] = useState(false)
+  const [showInvoiceConfirm, setShowInvoiceConfirm] = useState(false)
   // CSV-tuonnin tila
   const [showCsvImportModal, setShowCsvImportModal] = useState(false)
   const [csvParsing, setCsvParsing] = useState(false)
@@ -602,13 +608,14 @@ function App() {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   })
   const filteredTransactions = useMemo(() => {
-    if (ledgerMonthFilter === 'all') return transactions
+  if (ledgerMonthFilter === 'all') return transactions
     return transactions.filter(t => {
-      const dateStr = t.date_issued
-      return dateStr && dateStr.startsWith(ledgerMonthFilter)
+      // Näytetään tapahtuma, jos joko päiväys TAI maksupäivä osuu suodattimeen
+      const issuedMatches = t.date_issued && t.date_issued.startsWith(ledgerMonthFilter)
+      const paidMatches = t.date_paid && t.date_paid.startsWith(ledgerMonthFilter)
+      return issuedMatches || paidMatches
     })
   }, [transactions, ledgerMonthFilter])
-  const [editingCustomer, setEditingCustomer] = useState(null)
 
   const handleExportData = async () => {
     const { data: transactions } = await supabase.from('transactions').select('*')
@@ -889,33 +896,49 @@ function App() {
     setFormData(prev => ({ ...prev, contact_name: newContact, date_issued: newDate, amount_gross: newAmount, tax_rate: newTax, category_code: newCategory, y_tunnus: detectedYTunnus, receipt_url: receiptUrl }))
   }
 
-  const handleLedgerSubmit = async (e) => {
+  const handleLedgerSubmit = (e) => {
     e.preventDefault()
     if (!user) return
 
+    // Perusvalidoinnit (samat kuin ennen)
     if (!formData.contact_name || !formData.contact_name.trim()) {
       alert('Nimi puuttuu. Täytä se ennen tallennusta.')
       return
     }
-
-    // Varoita epäilyttävästä päivämäärästä ennen tallennusta
-    if (isDateSuspicious(formData.date_issued)) {
-      const year = new Date(formData.date_issued).getFullYear()
+    if (!formData.amount_gross || parseFloat(formData.amount_gross) <= 0) {
+      alert('Summan pitää olla suurempi kuin 0.')
+      return
+    }
+    if (parseFloat(formData.amount_gross) > 100000) {
       const proceed = window.confirm(
-        `Päivämäärän vuosi on ${year}, mikä poikkeaa kuluvasta vuodesta.\n\n` +
-        `Onko päivämäärä varmasti oikein? Väärä vuosi vaikeuttaa tositteen löytämistä myöhemmin.`
+        `Summa ${parseFloat(formData.amount_gross).toFixed(2)} € vaikuttaa erittäin suurelta.\n\nOnko summa varmasti oikein?`
       )
       if (!proceed) return
     }
-
+    if (isDateSuspicious(formData.date_issued)) {
+      const year = new Date(formData.date_issued).getFullYear()
+      const proceed = window.confirm(
+        `Päivämäärän vuosi on ${year}, mikä poikkeaa kuluvasta vuodesta.\n\nOnko päivämäärä varmasti oikein?`
+      )
+      if (!proceed) return
+    }
     if (formData.type === 'income') {
       const expectedTax = INCOME_TAX_RATES[parseInt(formData.category_code)]
       if (expectedTax !== undefined && parseFloat(formData.tax_rate) !== expectedTax) {
-        const proceed = window.confirm(`Valitsit tulokategorian, jonka oletusverokanta on ${expectedTax}%, mutta valitsit ${formData.tax_rate}%. Haluatko jatkaa?`)
+        const proceed = window.confirm(
+          `Valitsit tulokategorian, jonka oletusverokanta on ${expectedTax}%, mutta valitsit ${formData.tax_rate}%.\n\nHaluatko jatkaa?`
+        )
         if (!proceed) return
       }
     }
 
+    // Näytä esikatselu sen sijaan että tallennettaisiin suoraan
+    setShowTositeConfirm(true)
+  }
+
+  // Varsinainen tallennus – kutsutaan esikatselun "Vahvista"-napista
+  const confirmTositeSave = async () => {
+    setShowTositeConfirm(false)
     setStatusMessage(editingId ? 'Updating...' : 'Saving...')
     const gross = parseFloat(formData.amount_gross)
     const taxMultiplier = 1 + (parseFloat(formData.tax_rate) / 100)
@@ -923,9 +946,15 @@ function App() {
     const isExpense = formData.type === 'expense'
 
     if (!editingId) {
-      const { data: duplicates } = await supabase.from('transactions').select('id').eq('contact_name', formData.contact_name).eq('date_issued', formData.date_issued).eq('amount_gross', gross).maybeSingle()
+      const { data: duplicates } = await supabase.from('transactions').select('id')
+        .eq('contact_name', formData.contact_name)
+        .eq('date_issued', formData.date_issued)
+        .eq('amount_gross', gross)
+        .maybeSingle()
       if (duplicates) {
-        const proceed = window.confirm('Vaikuttaa siltä, että tämä tosite on jo kirjattu (sama nimi, päivä ja summa). Haluatko silti lisätä?')
+        const proceed = window.confirm(
+          'Vaikuttaa siltä, että tämä tosite on jo kirjattu (sama nimi, päivä ja summa).\n\nHaluatko silti lisätä?'
+        )
         if (!proceed) return
       }
     }
@@ -933,8 +962,10 @@ function App() {
     const payload = {
       user_id: user.id, type: formData.type, category_code: parseInt(formData.category_code),
       contact_name: formData.contact_name, date_issued: formData.date_issued,
-      amount_gross: gross, tax_rate: parseFloat(formData.tax_rate), amount_net: parseFloat(net.toFixed(2)),
-      status: isExpense ? 'paid' : 'unpaid', date_paid: isExpense ? formData.date_issued : null,
+      amount_gross: gross, tax_rate: parseFloat(formData.tax_rate),
+      amount_net: parseFloat(net.toFixed(2)),
+      status: isExpense ? 'paid' : 'unpaid',
+      date_paid: isExpense ? formData.date_issued : null,
       receipt_image_url: formData.receipt_url || null
     }
 
@@ -1154,8 +1185,8 @@ function App() {
     if (lastInvoiceUrl) { setLastInvoiceUrl(''); setLastInvoiceNumber(''); setInvoiceViewed(false) }
   }
 
-  const handleInvoiceSubmit = async (e) => {
-    e.preventDefault()
+  const confirmInvoiceSave = async () => {
+    setShowInvoiceConfirm(false)
     if (!user) return
     setIsInvoiceLoading(true)
     setStatusMessage('LUON LASKUA...')
@@ -1312,6 +1343,63 @@ function App() {
       setIsInvoiceLoading(false)
     }
   }
+
+  const handleInvoiceSubmit = (e) => {
+    e.preventDefault()
+    if (!user) return
+
+    // Perusvalidoinnit
+    if (invoiceData.lines.length === 0) {
+      alert('Laskulla pitää olla vähintään yksi rivi.')
+      return
+    }
+    if (invoiceData.lines.some(l => (parseFloat(l.quantity) || 0) <= 0)) {
+      alert('Jokaisella rivillä pitää olla positiivinen määrä.')
+      return
+    }
+    if (invoiceData.lines.some(l => (parseFloat(l.unit_price) || 0) <= 0)) {
+      alert('Jokaisella rivillä pitää olla positiivinen á-hinta.')
+      return
+    }
+
+    // Tarkista yritystiedot
+    const missingSettings = []
+    if (!settings.company_name?.trim()) missingSettings.push('Yrityksen nimi')
+    if (!settings.company_iban?.trim()) missingSettings.push('IBAN')
+    if (!settings.business_id?.trim()) missingSettings.push('Y-tunnus')
+
+    if (missingSettings.length > 0) {
+      const proceed = window.confirm(
+        `Seuraavat yritystiedot puuttuvat:\n\n${missingSettings.join('\n')}\n\n` +
+        `Lasku luodaan joka tapauksessa, mutta se ei ole virallinen.\n\n` +
+        `Suosittelemme täyttämään tiedot Asetukset-sivulla ensin.\n\n` +
+        `Jatketaanko silti?`
+      )
+      if (!proceed) return
+    }
+
+    // Tarkista asiakkaan tiedot
+    if (!invoiceData.buyer_address?.trim()) {
+      const proceed = window.confirm(
+        'Asiakkaan osoite puuttuu. Laskua ei voi lähettää virallisesti.\n\nJatketaanko?'
+      )
+      if (!proceed) return
+    }
+
+    const zeroVatLines = invoiceData.lines.filter(l => parseFloat(l.tax_rate) === 0)
+    if (zeroVatLines.length > 0) {
+      const proceed = window.confirm(
+        `Laskulla on ${zeroVatLines.length} rivi(ä) ALV 0%:\n\n` +
+        zeroVatLines.map(l => `• ${l.description}`).join('\n') +
+        `\n\nOnko tämä tarkoituksellista (esim. EU-myynti tai 0-verokanta)?`
+      )
+      if (!proceed) return
+    }
+
+    // Näytä esikatselu
+    setShowInvoiceConfirm(true)
+  }
+
 
   // Tyhjennä viimeisin laskuinfo, kun käyttäjä muokkaa lomaketta
   const clearLastInvoice = () => {
@@ -1500,7 +1588,17 @@ function App() {
                   <tbody>
                     {filteredTransactions.map((t) => (
                       <tr key={t.id}>
-                        <td>{new Date(t.date_issued).toLocaleDateString('fi-FI')}</td>
+                        <td>
+                          <div>{new Date(t.date_issued).toLocaleDateString('fi-FI')}</div>
+                          {t.date_paid && t.date_paid !== t.date_issued && (
+                            <div
+                              style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}
+                              title="Maksupäivä"
+                            >
+                              maksettu {new Date(t.date_paid).toLocaleDateString('fi-FI')}
+                            </div>
+                          )}
+                        </td>
                         <td><span className={`badge ${t.type}`}>{t.type}</span></td>
                         <td title={t.contact_name}>{t.contact_name}</td>
                         <td>
@@ -2103,6 +2201,220 @@ function App() {
           </div>
         </div>
       )}
+
+      {showTositeConfirm && (() => {
+        const gross = parseFloat(formData.amount_gross) || 0
+        const rate = parseFloat(formData.tax_rate) || 0
+        const net = gross / (1 + rate / 100)
+        const vatAmount = gross - net
+        const isExpense = formData.type === 'expense'
+        const category = categories.find(c => c.code === parseInt(formData.category_code))
+
+        return (
+          <div className="modal-overlay" onClick={() => setShowTositeConfirm(false)}>
+            <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+              <h2>TARKISTA TIEDOT</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '20px' }}>
+                Varmista että tiedot ovat oikein ennen tallennusta. Tämän jälkeen tosite
+                näkyy tapahtumalistalla ja Vero-raportissa.
+              </p>
+
+              <table style={{ width: '100%', fontSize: '0.95rem', marginBottom: '20px' }}>
+                <tbody>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '10px 0', color: 'var(--text-muted)' }}>Tyyppi</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right', fontWeight: 600 }}>
+                      <span className={`badge ${formData.type}`}>{formData.type}</span>
+                    </td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '10px 0', color: 'var(--text-muted)' }}>Kategoria</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right' }}>
+                      {formData.category_code} – {category?.name_fi || '—'}
+                    </td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '10px 0', color: 'var(--text-muted)' }}>Nimi</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right', fontWeight: 600 }}>
+                      {formData.contact_name}
+                    </td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '10px 0', color: 'var(--text-muted)' }}>Päivämäärä</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right' }}>
+                      {formData.date_issued?.split('-').reverse().join('.')}
+                    </td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '10px 0', color: 'var(--text-muted)' }}>ALV-kanta</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right' }}>{formData.tax_rate} %</td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '10px 0', color: 'var(--text-muted)' }}>Netto (ALV 0%)</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right', fontFamily: 'monospace' }}>
+                      {net.toFixed(2)} €
+                    </td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '10px 0', color: 'var(--text-muted)' }}>ALV-osuus</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right', fontFamily: 'monospace' }}>
+                      {vatAmount.toFixed(2)} €
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '14px 0 0 0', fontWeight: 700, fontSize: '1.05rem' }}>
+                      Brutto yhteensä
+                    </td>
+                    <td style={{ padding: '14px 0 0 0', textAlign: 'right', fontWeight: 700, fontSize: '1.15rem', fontFamily: 'monospace' }}>
+                      {gross.toFixed(2)} €
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              {formData.receipt_url && (
+                <p style={{ fontSize: '0.85rem', color: 'var(--success)', marginBottom: '16px' }}>
+                  📎 Kuva liitetty tositteeseen
+                </p>
+              )}
+
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  className="submit-btn"
+                  style={{ flex: 1, backgroundColor: '#10b981' }}
+                  onClick={confirmTositeSave}
+                >
+                  {editingId ? 'VAHVISTA PÄIVITYS' : 'VAHVISTA JA TALLENNA'}
+                </button>
+                <button
+                  type="button"
+                  className="cancel-btn"
+                  style={{ flex: 1 }}
+                  onClick={() => setShowTositeConfirm(false)}
+                >
+                  TAKAISIN
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {showInvoiceConfirm && (() => {
+        const { netTotal, grossTotal, groups } = invoiceTotals
+
+        return (
+          <div className="modal-overlay" onClick={() => setShowInvoiceConfirm(false)}>
+            <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '620px' }}>
+              <h2>TARKISTA LASKU ENNEN TALLENNUSTA</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '20px' }}>
+                Lasku tallennetaan ja PDF avautuu uuteen ikkunaan. Tarkista tiedot huolellisesti.
+              </p>
+
+              {/* Asiakas */}
+              <div style={{ marginBottom: '20px', padding: '12px 16px', backgroundColor: 'var(--bg-main)', borderRadius: '8px' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '4px' }}>
+                  Laskutettava asiakas
+                </div>
+                <div style={{ fontWeight: 700, fontSize: '1rem' }}>{invoiceData.buyer_name}</div>
+                {invoiceData.buyer_address && (
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', whiteSpace: 'pre-line' }}>
+                    {invoiceData.buyer_address}
+                  </div>
+                )}
+              </div>
+
+              {/* Laskun tiedot */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px', fontSize: '0.9rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Laskunumero</div>
+                  <div style={{ fontWeight: 600 }}>{invoiceData.invoice_number}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Päiväys</div>
+                  <div style={{ fontWeight: 600 }}>
+                    {invoiceData.date_issued?.split('-').reverse().join('.')}
+                  </div>
+                </div>
+              </div>
+
+              {/* Rivit */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '8px' }}>
+                  Laskun rivit ({invoiceData.lines.length})
+                </div>
+                <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <th style={{ textAlign: 'left', padding: '6px 0', color: 'var(--text-muted)' }}>Kuvaus</th>
+                      <th style={{ textAlign: 'right', padding: '6px 0', color: 'var(--text-muted)' }}>Määrä</th>
+                      <th style={{ textAlign: 'right', padding: '6px 0', color: 'var(--text-muted)' }}>á-hinta</th>
+                      <th style={{ textAlign: 'right', padding: '6px 0', color: 'var(--text-muted)' }}>ALV</th>
+                      <th style={{ textAlign: 'right', padding: '6px 0', color: 'var(--text-muted)' }}>Yhteensä</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoiceData.lines.map((l, i) => {
+                      const qty = parseFloat(l.quantity) || 0
+                      const price = parseFloat(l.unit_price) || 0
+                      const rate = parseFloat(l.tax_rate) || 0
+                      const lineNet = qty * price
+                      const lineGross = lineNet * (1 + rate / 100)
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <td style={{ padding: '8px 0' }}>{l.description}</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right', fontFamily: 'monospace' }}>{qty}</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right', fontFamily: 'monospace' }}>{price.toFixed(2)} €</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right' }}>{rate}%</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>
+                            {lineGross.toFixed(2)} €
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Yhteenveto */}
+              <div style={{ backgroundColor: 'var(--bg-main)', padding: '12px 16px', borderRadius: '8px', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', marginBottom: '6px' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Netto yhteensä</span>
+                  <span style={{ fontFamily: 'monospace' }}>{netTotal.toFixed(2)} €</span>
+                </div>
+                {Object.entries(groups).sort((a, b) => parseFloat(b[0]) - parseFloat(a[0])).map(([rate, g]) => (
+                  <div key={rate} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', marginBottom: '6px' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>ALV {rate}%</span>
+                    <span style={{ fontFamily: 'monospace' }}>{g.tax.toFixed(2)} €</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', fontWeight: 700, marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--border-color)' }}>
+                  <span>Maksettava yhteensä</span>
+                  <span style={{ fontFamily: 'monospace' }}>{grossTotal.toFixed(2)} €</span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  className="submit-btn"
+                  style={{ flex: 1, backgroundColor: '#10b981' }}
+                  onClick={confirmInvoiceSave}
+                >
+                  LUO LASKU
+                </button>
+                <button
+                  type="button"
+                  className="cancel-btn"
+                  style={{ flex: 1 }}
+                  onClick={() => setShowInvoiceConfirm(false)}
+                >
+                  TAKAISIN
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
