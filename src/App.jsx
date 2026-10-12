@@ -1616,21 +1616,54 @@ function App() {
                         <td><span className={`badge ${t.type}`}>{t.type}</span></td>
                         <td title={t.contact_name}>{t.contact_name}</td>
                         <td>
-                          {t.reference_number ? (
+                          {/* Tulot: laskun viitenumero (sininen) */}
+                          {t.type === 'income' && t.reference_number && (
                             <span
-                              title={`Viitenumero ${t.reference_number}`}
+                              title={`Laskun viitenumero ${t.reference_number}`}
                               style={{
                                 fontFamily: 'monospace',
                                 fontSize: '0.8rem',
-                                color: 'var(--text-muted)',
+                                color: 'var(--primary-blue)',
                                 padding: '2px 6px',
-                                backgroundColor: 'var(--bg-main)',
-                                borderRadius: '4px'
+                                backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                                borderRadius: '4px',
+                                display: 'inline-block',
+                                maxWidth: '100%',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
                               }}
                             >
                               #{t.reference_number}
                             </span>
-                          ) : '—'}
+                          )}
+                          {/* Menot: käyttäjän antama kuluviite (violetti) */}
+                          {t.type === 'expense' && t.expense_reference && (
+                            <span
+                              title={`Kuluviite: ${t.expense_reference}`}
+                              style={{
+                                fontFamily: 'monospace',
+                                fontSize: '0.8rem',
+                                color: '#6366f1',
+                                padding: '2px 6px',
+                                backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                                borderRadius: '4px',
+                                display: 'inline-block',
+                                maxWidth: '100%',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              {t.expense_reference.length > 20
+                                ? t.expense_reference.substring(0, 18) + '…'
+                                : t.expense_reference}
+                            </span>
+                          )}
+                          {/* Ei kumpaakaan */}
+                          {!t.reference_number && !t.expense_reference && (
+                            <span style={{ color: 'var(--text-muted)' }}>—</span>
+                          )}
                         </td>
                         <td style={{ fontWeight: '600' }}>{t.amount_gross}</td>
                         <td>{t.tax_rate}%</td>
