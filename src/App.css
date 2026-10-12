@@ -716,3 +716,126 @@ textarea { resize: vertical; }
   background: rgba(0, 0, 0, 0.15);
   border-radius: 4px;
 }
+
+/* =============================================
+   LASKUN RIVIT
+   ============================================= */
+.invoice-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 16px;
+  background-color: var(--bg-main);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+
+.invoice-lines-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.invoice-lines-header h3 {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Yksi rivi */
+.invoice-line {
+  display: grid;
+  grid-template-columns: 2fr 80px 100px 90px 100px 32px;
+  gap: 8px;
+  align-items: center;
+}
+
+.invoice-line input,
+.invoice-line select {
+  height: 38px;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+}
+
+.invoice-line-total {
+  font-family: monospace;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: right;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.invoice-line-remove {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--danger);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.invoice-line-remove:hover:not(:disabled) {
+  background-color: rgba(239, 68, 68, 0.1);
+  border-color: var(--danger);
+}
+
+.invoice-line-remove:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Yhteenveto */
+.invoice-totals {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.invoice-totals-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.invoice-totals-row.total {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* Mobiili: rivit pystysuoraan */
+@media (max-width: 700px) {
+  .invoice-line {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "desc desc"
+      "qty price"
+      "vat total"
+      "remove remove";
+    gap: 6px;
+  }
+  .invoice-line-desc { grid-area: desc; }
+  .invoice-line-qty { grid-area: qty; }
+  .invoice-line-price { grid-area: price; }
+  .invoice-line-vat { grid-area: vat; }
+  .invoice-line-total { grid-area: total; text-align: left; }
+  .invoice-line-remove { grid-area: remove; width: 100%; border-radius: 6px; }
+}

@@ -23,6 +23,14 @@ const DEFAULT_SETTINGS = {
   vat_reporting_period: 'monthly',
 }
 
+// Yksittäinen laskurivi
+const DEFAULT_INVOICE_LINE = {
+  description: '',
+  quantity: '1',
+  unit_price: '0.00',
+  tax_rate: '25.5',
+}
+
 const DEFAULT_INVOICE_DATA = {
   buyer_name: '',
   buyer_address: '',
@@ -30,10 +38,7 @@ const DEFAULT_INVOICE_DATA = {
   invoice_number: '1',
   reference_number: '',
   project_details: '',
-  description: '',
-  quantity: '1',
-  unit_price: '0.00',
-  tax_rate: '25.5',
+  lines: [{ ...DEFAULT_INVOICE_LINE }],   // <- uusi
   date_issued: new Date().toISOString().split('T')[0],
   income_category: '3001',
   selectedCustomerId: '',
@@ -315,13 +320,38 @@ function App() {
   const isInvoiceFormValid = useMemo(() => {
     return (
       invoiceData.invoice_number.toString().trim() !== '' &&
-      invoiceData.description.trim() !== '' &&
-      parseFloat(invoiceData.quantity) > 0 &&
-      parseFloat(invoiceData.unit_price) > 0 &&
+      invoiceData.selectedCustomerId !== '' &&
       invoiceData.income_category !== '' &&
-      invoiceData.selectedCustomerId !== ''
+      invoiceData.lines.length > 0 &&
+      invoiceData.lines.every(l =>
+        l.description.trim() !== '' &&
+        parseFloat(l.quantity) > 0 &&
+        parseFloat(l.unit_price) > 0
+      )
     )
   }, [invoiceData])
+  // Laske rivien summat ja ALV-ryhmät
+  const invoiceTotals = useMemo(() => {
+    const groups = {} // { "25.5": { net, tax, gross }, "14": {...} }
+    let netTotal = 0, taxTotal = 0, grossTotal = 0
+    invoiceData.lines.forEach(line => {
+      const qty = parseFloat(line.quantity) || 0
+      const price = parseFloat(line.unit_price) || 0
+      const rate = parseFloat(line.tax_rate) || 0
+      const net = qty * price
+      const tax = net * (rate / 100)
+      const gross = net + tax
+      netTotal += net
+      taxTotal += tax
+      grossTotal += gross
+      const key = rate.toString()
+      if (!groups[key]) groups[key] = { net: 0, tax: 0, gross: 0 }
+      groups[key].net += net
+      groups[key].tax += tax
+      groups[key].gross += gross
+    })
+    return { netTotal, taxTotal, grossTotal, groups }
+  }, [invoiceData.lines])
   const [formData, setFormData] = useState({
     type: 'expense',
     category_code: 346,
@@ -425,6 +455,7 @@ function App() {
   const resetInvoiceForm = (nextInvoiceNumber) => {
     setInvoiceData({
       ...DEFAULT_INVOICE_DATA,
+      lines: [{ ...DEFAULT_INVOICE_LINE }],
       invoice_number: nextInvoiceNumber.toString(),
       date_issued: new Date().toISOString().split('T')[0],
     })
@@ -850,31 +881,35 @@ function App() {
     setIsInvoiceLoading(true)
     setStatusMessage('LUON LASKUA...')
     try {
-      // Generoi viitenumero laskun numerosta
-      const generatedReference = generoiViitenumero(parseInt(invoiceData.invoice_number));
+      const generatedReference = generoiViitenumero(parseInt(invoiceData.invoice_number))
+      const { netTotal, taxTotal, grossTotal, groups } = invoiceTotals
 
-      // Lasketaan summat
-      const qty = parseFloat(invoiceData.quantity), price = parseFloat(invoiceData.unit_price)
-      const net = qty * price, taxRate = parseFloat(invoiceData.tax_rate)
-      const taxAmount = net * (taxRate / 100), gross = net + taxAmount
-      const issueDate = new Date(invoiceData.date_issued), dueDate = new Date(issueDate)
+      const issueDate = new Date(invoiceData.date_issued)
+      const dueDate = new Date(issueDate)
       dueDate.setDate(dueDate.getDate() + 14)
       const formattedDueDate = dueDate.toISOString().split('T')[0]
 
       const safeSettings = {
-        company_name: settings.company_name || 'Yritys Oy', company_address: settings.company_address || 'Osoite',
-        company_phone: settings.company_phone || '', company_email: settings.company_email || '',
-        company_iban: settings.company_iban || '', company_swift: settings.company_swift || '',
-        business_id: settings.business_id || '', company_vat: settings.company_vat || '',
+        company_name: settings.company_name || 'Yritys Oy',
+        company_address: settings.company_address || 'Osoite',
+        company_phone: settings.company_phone || '',
+        company_email: settings.company_email || '',
+        company_iban: settings.company_iban || '',
+        company_swift: settings.company_swift || '',
+        business_id: settings.business_id || '',
+        company_vat: settings.company_vat || '',
         delay_tax_rate: settings.delay_tax_rate || '11.00'
       }
 
-      // PDF:n luonti
+      // ===== PDF =====
       const doc = new jsPDF()
-      doc.setFontSize(22); doc.setFont(undefined, 'bold'); doc.text(safeSettings.company_name, 14, 20); doc.text('LASKU', 196, 20, { align: 'right' })
-      doc.setFontSize(12); doc.setFont(undefined, 'normal'); doc.text(invoiceData.buyer_name || 'Asiakas', 14, 35)
-      const buyerAddress = invoiceData.buyer_address || ''
-      doc.text(doc.splitTextToSize(buyerAddress, 80), 14, 41)
+      doc.setFontSize(22); doc.setFont(undefined, 'bold')
+      doc.text(safeSettings.company_name, 14, 20)
+      doc.text('LASKU', 196, 20, { align: 'right' })
+
+      doc.setFontSize(12); doc.setFont(undefined, 'normal')
+      doc.text(invoiceData.buyer_name || 'Asiakas', 14, 35)
+      doc.text(doc.splitTextToSize(invoiceData.buyer_address || '', 80), 14, 41)
 
       autoTable(doc, {
         startY: 28, margin: { left: 120 }, theme: 'plain',
@@ -884,36 +919,50 @@ function App() {
           ['Maksuehto', '14 päivää'],
           ['Eräpäivä', formattedDueDate?.split('-').reverse().join('.') || ''],
           ['Viivästyskorko', safeSettings.delay_tax_rate + '%'],
-          ['Viitenumero', generatedReference]  // käytetään generoitua viitettä
+          ['Viitenumero', generatedReference]
         ],
         styles: { fontSize: 10, cellPadding: 1 },
         columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } }
       })
 
+      // Rivit-taulukko
       autoTable(doc, {
         startY: Math.max(doc.lastAutoTable.finalY + 10, 65),
-        head: [['Kuvaus', 'Määrä', 'á-hinta', 'Yhteensä']],
-        body: [[invoiceData.description || '', qty || 0, price.toFixed(2) + '€', net.toFixed(2) + '€']],
+        head: [['Kuvaus', 'Määrä', 'á-hinta', 'ALV %', 'Yhteensä (alv 0%)']],
+        body: invoiceData.lines.map(l => {
+          const qty = parseFloat(l.quantity) || 0
+          const price = parseFloat(l.unit_price) || 0
+          const net = qty * price
+          return [l.description, qty, price.toFixed(2) + '€', l.tax_rate + '%', net.toFixed(2) + '€']
+        }),
         theme: 'grid',
         headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0] },
         styles: { fontSize: 10 }
       })
 
       const finalY = doc.lastAutoTable.finalY
-      doc.setFontSize(10); doc.setFont(undefined, 'bold'); doc.text('Hankkeen tiedot', 14, finalY + 10)
-      doc.setFont(undefined, 'normal'); doc.text(invoiceData.project_details || '', 14, finalY + 16)
+      doc.setFontSize(10); doc.setFont(undefined, 'bold')
+      doc.text('Hankkeen tiedot', 14, finalY + 10)
+      doc.setFont(undefined, 'normal')
+      doc.text(invoiceData.project_details || '', 14, finalY + 16)
+
+      // ALV-erittely + loppusumma
+      const totalsBody = [
+        ['Yhteensä (alv 0%)', netTotal.toFixed(2) + '€'],
+        ...Object.entries(groups)
+          .sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]))
+          .map(([rate, g]) => [`ALV ${rate}%`, g.tax.toFixed(2) + '€']),
+        ['Maksettava yhteensä', grossTotal.toFixed(2) + '€']
+      ]
 
       autoTable(doc, {
         startY: finalY + 10, margin: { left: 120 }, theme: 'plain',
-        body: [
-          ['Yhteensä (alv 0%)', net.toFixed(2) + '€'],
-          [`${taxRate.toFixed(2)}% ALV`, taxAmount.toFixed(2) + '€'],
-          ['Maksettava yhteensä', gross.toFixed(2) + '€']
-        ],
+        body: totalsBody,
         styles: { fontSize: 10, cellPadding: 1.5 },
-        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 }, 1: { halign: 'right' } }
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 50 }, 1: { halign: 'right' } }
       })
 
+      // Footer
       const footerY = 270
       doc.setFontSize(8); doc.setTextColor(100, 100, 100)
       doc.text(`${safeSettings.company_name} | ${safeSettings.company_address}`, 105, footerY, { align: 'center' })
@@ -921,6 +970,7 @@ function App() {
       doc.text(`IBAN: ${safeSettings.company_iban} | SWIFT: ${safeSettings.company_swift}`, 105, footerY + 10, { align: 'center' })
       doc.text(`Y-tunnus: ${safeSettings.business_id} | ALV-nro: ${safeSettings.company_vat}`, 105, footerY + 15, { align: 'center' })
 
+      // ===== Tallenna PDF =====
       const pdfBlob = doc.output('blob')
       const pdfFileName = `${user.id}/invoice_${invoiceData.invoice_number}_${Date.now()}.pdf`
       const { error: uploadError } = await supabase.storage.from('invoices').upload(pdfFileName, pdfBlob, { contentType: 'application/pdf', cacheControl: '3600' })
@@ -932,36 +982,37 @@ function App() {
           pdfUrl = signedData.signedUrl
           setLastInvoiceUrl(pdfUrl)
           setLastInvoiceNumber(invoiceData.invoice_number)
-        } else {
-          console.error('Signed URL error:', signedError)
         }
-      } else {
-        console.error('Upload error:', uploadError)
       }
 
-      // Tallenna tapahtuma tietokantaan – lisää viitenumero
-      const { error: dbError } = await supabase.from('transactions').insert([{
-        user_id: user.id,
-        type: 'income',
-        category_code: parseInt(invoiceData.income_category),
-        contact_name: invoiceData.buyer_name,
-        date_issued: invoiceData.date_issued,
-        due_date: formattedDueDate,
-        amount_gross: gross,
-        tax_rate: taxRate,
-        amount_net: net,
-        status: 'unpaid',
-        description: invoiceData.description,
-        invoice_pdf_url: pdfUrl,
-        reference_number: generatedReference   // <-- lisätty
-      }])
+      // ===== Tietokantaan: yksi tapahtuma per ALV-ryhmä =====
+      const txRows = Object.entries(groups).map(([rate, g]) => {
+        const linesWithRate = invoiceData.lines.filter(l => parseFloat(l.tax_rate) === parseFloat(rate))
+        const description = linesWithRate.map(l => l.description).filter(Boolean).join(', ')
+        return {
+          user_id: user.id,
+          type: 'income',
+          category_code: parseInt(invoiceData.income_category),
+          contact_name: invoiceData.buyer_name,
+          date_issued: invoiceData.date_issued,
+          due_date: formattedDueDate,
+          amount_gross: g.gross,
+          tax_rate: parseFloat(rate),
+          amount_net: g.net,
+          status: 'unpaid',
+          description,
+          invoice_pdf_url: pdfUrl,
+          reference_number: generatedReference
+        }
+      })
 
-      // Päivitä asiakkaan perustiedot (ei viitenumeroa)
+      const { error: dbError } = await supabase.from('transactions').insert(txRows)
+
+      // Päivitä asiakas
       await supabase.from('customers').upsert({
         user_id: user.id,
         name: invoiceData.buyer_name,
         address: invoiceData.buyer_address
-        // reference_number jätetään pois, koska se ei ole asiakaskohtainen
       }, { onConflict: 'user_id, name' })
 
       const nextNum = parseInt(invoiceData.invoice_number) + 1
@@ -981,6 +1032,57 @@ function App() {
     } finally {
       setIsInvoiceLoading(false)
     }
+  }
+
+  // Tyhjennä viimeisin laskuinfo, kun käyttäjä muokkaa lomaketta
+  const clearLastInvoice = () => {
+    if (lastInvoiceUrl) {
+      setLastInvoiceUrl('')
+      setLastInvoiceNumber('')
+      setInvoiceViewed(false)
+    }
+  }
+
+  // Muokkaa yksittäistä riviä
+  const handleLineChange = (index, field, value) => {
+    setInvoiceData(prev => {
+      const lines = [...prev.lines]
+      lines[index] = { ...lines[index], [field]: value }
+      return { ...prev, lines }
+    })
+    clearLastInvoice()
+  }
+
+  // Lisää uusi tyhjä rivi (perii nykyisen kategorian oletus-ALV:n)
+  const handleAddLine = () => {
+    const defaultRate = String(INCOME_TAX_RATES[parseInt(invoiceData.income_category, 10)] ?? 25.5)
+    setInvoiceData(prev => ({
+      ...prev,
+      lines: [...prev.lines, { ...DEFAULT_INVOICE_LINE, tax_rate: defaultRate }]
+    }))
+    clearLastInvoice()
+  }
+
+  // Poista rivi (vähintään 1 rivi täytyy jäädä)
+  const handleRemoveLine = (index) => {
+    setInvoiceData(prev => {
+      if (prev.lines.length <= 1) return prev
+      return { ...prev, lines: prev.lines.filter((_, i) => i !== index) }
+    })
+    clearLastInvoice()
+  }
+
+  // Vaihda tulon tyyppi – päivitä rivien ALV vain, jos ne käyttävät vanhaa oletusta
+  const handleIncomeCategoryChange = (category) => {
+    const newRate = String(INCOME_TAX_RATES[parseInt(category, 10)] ?? 25.5)
+    setInvoiceData(prev => {
+      const oldRate = String(INCOME_TAX_RATES[parseInt(prev.income_category, 10)] ?? 25.5)
+      const lines = prev.lines.map(line =>
+        line.tax_rate === oldRate ? { ...line, tax_rate: newRate } : line
+      )
+      return { ...prev, income_category: category, lines }
+    })
+    clearLastInvoice()
   }
 
   const reportData = useMemo(() => {
@@ -1157,14 +1259,160 @@ function App() {
           <div className="form-card">
             <h2>LUO UUSI LASKU</h2>
             <form onSubmit={handleInvoiceSubmit} className="form-grid">
-              <div className="input-group"><label>LASKUN NUMERO</label><input type="number" name="invoice_number" value={invoiceData.invoice_number} onChange={handleInvoiceChange} /></div>
-              <div className="input-group"><label>TULON TYYPPI</label><select name="income_category" value={invoiceData.income_category} onChange={(e) => { const category = e.target.value; const categoryNum = parseInt(category, 10); const taxRate = INCOME_TAX_RATES[categoryNum] || 25.5; setInvoiceData({ ...invoiceData, income_category: category, tax_rate: String(taxRate) }) }} required><option value="">-- Valitse --</option>{categories.filter(c => c.type === 'income').map(c => (<option key={c.code} value={c.code}>{c.name_fi}</option>))}</select></div>
-              <div className="input-group" style={{ gridColumn: '1 / -1' }}><label>Asiakas</label><div style={{ display: 'flex', gap: '8px', alignItems: 'stretch', flexWrap: 'wrap' }}><select value={invoiceData.selectedCustomerId || ''} onChange={(e) => { const customerId = e.target.value; const customer = customers.find(c => c.id === customerId); if (customer) { setInvoiceData({ ...invoiceData, selectedCustomerId: customer.id, buyer_name: customer.name, buyer_address: customer.address || '', reference_number: customer.reference_number || '', buyer_email: customer.email || '' }) } else { setInvoiceData({ ...invoiceData, selectedCustomerId: '', buyer_name: '', buyer_address: '', reference_number: '' }) } }} style={{ flex: 1, height: '42px' }}><option value="">-- Valitse asiakas --</option>{customers.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}</select><button type="button" className="submit-btn" style={{ padding: '0 16px', height: '42px', whiteSpace: 'nowrap', marginTop: '0', flexShrink: 0 }} onClick={() => setShowCustomerModal(true)}>+ Lisää uusi asiakas</button></div></div>
-              <div className="input-group" style={{ gridColumn: '1 / -1' }}><label>KUVAUS</label><input type="text" name="description" value={invoiceData.description} onChange={handleInvoiceChange} /></div>
-              <div className="input-group"><label>MÄÄRÄ</label><input type="number" name="quantity" value={invoiceData.quantity} onChange={handleInvoiceChange} /></div>
-              <div className="input-group"><label>YKSIKKÖ HINTA ALV 0%(€)</label><input type="number" name="unit_price" value={invoiceData.unit_price} onChange={handleInvoiceChange} step="0.01" /></div>
-              <div className="input-group" style={{ gridColumn: '1 / -1' }}><label>HANKKEEN LISÄTIEDOT</label><input type="text" name="project_details" value={invoiceData.project_details} onChange={handleInvoiceChange} /></div>
-              <button type="submit" className="submit-btn" disabled={isInvoiceLoading || !isInvoiceFormValid} style={{ backgroundColor: isInvoiceLoading ? 'var(--primary-blue)' : isInvoiceFormValid ? '#10b981' : '#e5e7eb', color: isInvoiceFormValid ? 'white' : '#9ca3af', border: isInvoiceFormValid ? 'none' : '1px solid #fca5a5', cursor: isInvoiceFormValid ? 'pointer' : 'not-allowed' }}>{isInvoiceLoading ? 'Tallennetaan...' : isInvoiceFormValid ? 'TALLENNA' : 'TÄYTÄ KAIKKI KOHDAT'}</button>
+              <div className="input-group">
+                <label>LASKUN NUMERO</label>
+                <input type="number" name="invoice_number" value={invoiceData.invoice_number} onChange={handleInvoiceChange} />
+              </div>
+
+              <div className="input-group">
+                <label>TULON TYYPPI</label>
+                <select
+                  name="income_category"
+                  value={invoiceData.income_category}
+                  onChange={(e) => handleIncomeCategoryChange(e.target.value)}
+                  required
+                >
+                  <option value="">-- Valitse --</option>
+                  {categories.filter(c => c.type === 'income').map(c => (
+                    <option key={c.code} value={c.code}>{c.name_fi}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="input-group" style={{ gridColumn: '1 / -1' }}>
+                <label>Asiakas</label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch', flexWrap: 'wrap' }}>
+                  <select
+                    value={invoiceData.selectedCustomerId || ''}
+                    onChange={(e) => {
+                      const customerId = e.target.value
+                      const customer = customers.find(c => c.id === customerId)
+                      if (customer) {
+                        setInvoiceData({
+                          ...invoiceData,
+                          selectedCustomerId: customer.id,
+                          buyer_name: customer.name,
+                          buyer_address: customer.address || '',
+                          reference_number: customer.reference_number || '',
+                          buyer_email: customer.email || ''
+                        })
+                      } else {
+                        setInvoiceData({ ...invoiceData, selectedCustomerId: '', buyer_name: '', buyer_address: '', reference_number: '' })
+                      }
+                    }}
+                    style={{ flex: 1, height: '42px' }}
+                  >
+                    <option value="">-- Valitse asiakas --</option>
+                    {customers.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                  </select>
+                  <button type="button" className="submit-btn" style={{ padding: '0 16px', height: '42px', whiteSpace: 'nowrap', marginTop: '0', flexShrink: 0 }} onClick={() => setShowCustomerModal(true)}>+ Lisää uusi asiakas</button>
+                </div>
+              </div>
+
+              {/* ===== LASKUN RIVIT ===== */}
+              <div className="invoice-lines" style={{ gridColumn: '1 / -1' }}>
+                <div className="invoice-lines-header">
+                  <h3 style={{ margin: 0 }}>LASKUN RIVIT</h3>
+                  <button type="button" className="csv-action-btn" onClick={handleAddLine}>+ Lisää rivi</button>
+                </div>
+
+                {invoiceData.lines.map((line, i) => {
+                  const qty = parseFloat(line.quantity) || 0
+                  const price = parseFloat(line.unit_price) || 0
+                  const rate = parseFloat(line.tax_rate) || 0
+                  const lineNet = qty * price
+                  const lineGross = lineNet * (1 + rate / 100)
+
+                  return (
+                    <div key={i} className="invoice-line">
+                      <input
+                        type="text"
+                        placeholder="Kuvaus (esim. Työn osuus)"
+                        value={line.description}
+                        onChange={(e) => handleLineChange(i, 'description', e.target.value)}
+                        className="invoice-line-desc"
+                      />
+                      <input
+                        type="number"
+                        placeholder="Määrä"
+                        value={line.quantity}
+                        onChange={(e) => handleLineChange(i, 'quantity', e.target.value)}
+                        step="0.01"
+                        className="invoice-line-qty"
+                      />
+                      <input
+                        type="number"
+                        placeholder="á-hinta €"
+                        value={line.unit_price}
+                        onChange={(e) => handleLineChange(i, 'unit_price', e.target.value)}
+                        step="0.01"
+                        className="invoice-line-price"
+                      />
+                      <select
+                        value={line.tax_rate}
+                        onChange={(e) => handleLineChange(i, 'tax_rate', e.target.value)}
+                        className="invoice-line-vat"
+                      >
+                        <option value="25.5">25.5%</option>
+                        <option value="24">24%</option>
+                        <option value="14">14%</option>
+                        <option value="13.5">13.5%</option>
+                        <option value="10">10%</option>
+                        <option value="0">0%</option>
+                      </select>
+                      <span className="invoice-line-total">{lineGross.toFixed(2)} €</span>
+                      <button
+                        type="button"
+                        className="invoice-line-remove"
+                        onClick={() => handleRemoveLine(i)}
+                        disabled={invoiceData.lines.length <= 1}
+                        title={invoiceData.lines.length <= 1 ? 'Vähintään yksi rivi tarvitaan' : 'Poista rivi'}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )
+                })}
+
+                {/* Yhteenveto */}
+                <div className="invoice-totals">
+                  <div className="invoice-totals-row">
+                    <span>Yhteensä (alv 0%)</span>
+                    <span>{invoiceTotals.netTotal.toFixed(2)} €</span>
+                  </div>
+                  {Object.entries(invoiceTotals.groups)
+                    .sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]))
+                    .map(([rate, g]) => (
+                      <div key={rate} className="invoice-totals-row">
+                        <span>ALV {rate}%</span>
+                        <span>{g.tax.toFixed(2)} €</span>
+                      </div>
+                    ))}
+                  <div className="invoice-totals-row total">
+                    <span>Maksettava yhteensä</span>
+                    <span>{invoiceTotals.grossTotal.toFixed(2)} €</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="input-group" style={{ gridColumn: '1 / -1' }}>
+                <label>HANKKEEN LISÄTIEDOT</label>
+                <input type="text" name="project_details" value={invoiceData.project_details} onChange={handleInvoiceChange} />
+              </div>
+
+              <button
+                type="submit"
+                className="submit-btn"
+                disabled={isInvoiceLoading || !isInvoiceFormValid}
+                style={{
+                  backgroundColor: isInvoiceLoading ? 'var(--primary-blue)' : isInvoiceFormValid ? '#10b981' : '#e5e7eb',
+                  color: isInvoiceFormValid ? 'white' : '#9ca3af',
+                  border: isInvoiceFormValid ? 'none' : '1px solid #fca5a5',
+                  cursor: isInvoiceFormValid ? 'pointer' : 'not-allowed'
+                }}
+              >
+                {isInvoiceLoading ? 'Tallennetaan...' : isInvoiceFormValid ? 'TALLENNA' : 'TÄYTÄ KAIKKI KOHDAT'}
+              </button>
             </form>
             {lastInvoiceUrl && (<div style={{ marginTop: '24px', padding: '16px', backgroundColor: 'var(--bg-main)', borderRadius: '8px' }}><p style={{ marginBottom: '12px', fontWeight: 600 }}>✅ Lasku {lastInvoiceNumber} – {settings.company_name || 'Yritys'} luotu!</p><div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}><button onClick={() => { window.open(lastInvoiceUrl, '_blank'); setInvoiceViewed(true) }} className="edit-btn" style={{ flex: 1 }}>📄 Näytä lasku</button><button onClick={() => { const company = settings.company_name || 'Yritys'; const subject = `Lasku ${lastInvoiceNumber} – ${company}`; const body = `Hei,\n\nTässä linkki laskuun:\n${lastInvoiceUrl}\n\nKiitos!`; navigator.clipboard?.writeText(lastInvoiceUrl).catch(() => {}); window.location.href = `mailto:${invoiceData.buyer_email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}` }} className="edit-btn" style={{ flex: 1, opacity: invoiceViewed ? 1 : 0.5 }} disabled={!invoiceViewed} title={invoiceViewed ? 'Lähetä sähköpostilla' : 'Katso lasku ensin'}>📧 Lähetä sähköpostilla</button></div><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px' }}>Linkki on voimassa 14 päivää.</p></div>)}
           </div>
