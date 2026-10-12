@@ -60,6 +60,8 @@ const INCOME_TAX_RATES = {
   3903: 0,
 }
 
+const MONTH_LABELS = ['Tammi', 'Helmi', 'Maalis', 'Huhti', 'Touko', 'Kesä', 'Heinä', 'Elo', 'Syys', 'Loka', 'Marras', 'Joulu']
+
 // ===== CSV-tuonnin apufunktiot =====
 
 // Jäsennä yksi CSV-rivi (tukee lainausmerkkejä ja valittua erotinta)
@@ -273,8 +275,7 @@ function generoiViitenumero(laskunNumero) {
   return pohja + tarkiste;
 }
 
-// Kuukausien nimet kuvaajaa varten
-const MONTH_LABELS = ['Tammi', 'Helmi', 'Maalis', 'Huhti', 'Touko', 'Kesä', 'Heinä', 'Elo', 'Syys', 'Loka', 'Marras', 'Joulu']
+
 
 // Vero-välilehden kuvaaja: näyttää tulot, menot ja suurimmat kulut valitulla aikavälillä
 function VeroVisuals({ transactions, categories, reportYear, effectivePeriod }) {
@@ -340,11 +341,28 @@ function VeroVisuals({ transactions, categories, reportYear, effectivePeriod }) 
 
   const hasData = data.totalIncome > 0 || data.totalExpense > 0
   if (!hasData) {
+    // Muodosta selkokielinen aikavälin kuvaus
+    let periodLabel = ''
+    if (effectivePeriod === 'all') {
+      periodLabel = `koko vuodelta ${reportYear}`
+    } else if (effectivePeriod.startsWith('Q')) {
+      const q = effectivePeriod
+      const months = { Q1: 'tammi–maalis', Q2: 'huhti–kesä', Q3: 'heinä–syys', Q4: 'loka–joulu' }
+      periodLabel = `${q} (${months[q]}) vuodelta ${reportYear}`
+    } else {
+      const monthNames = ['Tammikuu', 'Helmikuu', 'Maaliskuu', 'Huhtikuu', 'Toukokuu', 'Kesäkuu', 'Heinäkuu', 'Elokuu', 'Syyskuu', 'Lokakuu', 'Marraskuu', 'Joulukuu']
+      periodLabel = `${monthNames[parseInt(effectivePeriod) - 1]} ${reportYear}`
+    }
+
     return (
       <div className="report-card" style={{ marginBottom: '20px' }}>
         <h3>Taloudellinen tilanne</h3>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Ei tapahtumia valitulla aikavälillä.
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '8px' }}>
+          Ei tapahtumia aikavälillä: <strong>{periodLabel}</strong>.
+        </p>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+          Vaihda vuosi, kvartaali tai kuukausi yllä olevista valikoista. Huomioithan, että
+          tulot lasketaan mukaan vasta kun ne on merkitty <strong>maksetuiksi</strong>.
         </p>
       </div>
     )
@@ -389,12 +407,12 @@ function VeroVisuals({ transactions, categories, reportYear, effectivePeriod }) 
         </div>
 
         {data.totalProfit < 0 && (
-          <p style={{ marginTop: '12px', fontSize: '0.9rem', color: 'var(--danger)', fontWeight: 600, margin: '12px 0 0 0' }}>
+          <p style={{ marginTop: '12px', fontSize: '0.9rem', color: 'var(--danger)', fontWeight: 600 }}>
             ⚠️ Menot ylittävät tulot {Math.abs(data.totalProfit).toFixed(2)} €:lla tällä aikavälillä.
           </p>
         )}
         {data.totalProfit > 0 && (
-          <p style={{ marginTop: '12px', fontSize: '0.9rem', color: 'var(--success)', fontWeight: 600, margin: '12px 0 0 0' }}>
+          <p style={{ marginTop: '12px', fontSize: '0.9rem', color: 'var(--success)', fontWeight: 600 }}>
             ✓ Voitollinen aikaväli — tulos {data.totalProfit.toFixed(2)} €.
           </p>
         )}
@@ -1552,13 +1570,24 @@ function App() {
               {reportPeriodType === 'month' && (
                 <div className="input-group"><label>Kuukausi</label>
                   <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}>
-                    {/* kuukaudet */}
+                    <option value="01">Tammikuu</option>
+                    <option value="02">Helmikuu</option>
+                    <option value="03">Maaliskuu</option>
+                    <option value="04">Huhtikuu</option>
+                    <option value="05">Toukokuu</option>
+                    <option value="06">Kesäkuu</option>
+                    <option value="07">Heinäkuu</option>
+                    <option value="08">Elokuu</option>
+                    <option value="09">Syyskuu</option>
+                    <option value="10">Lokakuu</option>
+                    <option value="11">Marraskuu</option>
+                    <option value="12">Joulukuu</option>
                   </select>
                 </div>
               )}
             </div>
 
-            {/* VAROITUS OSITTAIN MAKSETTU*/}
+            {/* VAROITUS */}
             {partiallyPaidInvoices.length > 0 && (
               <div style={{
                 padding: '12px 16px',
@@ -1577,20 +1606,15 @@ function App() {
                 </ul>
               </div>
             )}
+            {/*VAROITUS*/}
 
-            {/* Taloudellinen kuvaaja */}
-                <VeroVisuals
-                  transactions={transactions}
-                  categories={categories}
-                  reportYear={reportYear}
-                  effectivePeriod={effectivePeriod}
-                />
-
-                <div className="report-grid">
-                  {/* raporttikortit (ennallaan) */}
-                </div>
-              </div>
-            )}
+            {/*  Taloudellinen kuvaaja */}
+            <VeroVisuals
+              transactions={transactions}
+              categories={categories}
+              reportYear={reportYear}
+              effectivePeriod={effectivePeriod}
+            />
 
             <div className="report-grid">
               <div className="report-card"><h3>Kotimaan myynnit</h3><table className="report-table"><tbody>{Object.entries(reportData.alvSalesTax).filter(([, amount]) => amount > 0).sort((a, b) => parseFloat(b[0]) - parseFloat(a[0])).map(([rate, amount]) => (<tr key={rate}><th>{rate} % vero</th><td className="money">{amount.toFixed(2)} €</td></tr>))}</tbody></table></div>
