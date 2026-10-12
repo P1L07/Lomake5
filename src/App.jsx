@@ -519,9 +519,11 @@ function App() {
     })
   }
 
-  const parseReceiptText = async (text, imageFile) => {
+    const parseReceiptText = async (text, imageFile) => {
     let newDate = formData.date_issued, newAmount = formData.amount_gross, newTax = formData.tax_rate
-    let newContact = formData.contact_name, newCategory = formData.category_code, detectedYTunnus = ''
+    let newContact = '', newCategory = formData.category_code, detectedYTunnus = ''
+
+    // 1) Y-tunnus → kauppiaan oletusnimi
     const yRegex = /\b\d{7}-\d\b/
     const yMatch = text.match(yRegex)
     if (yMatch) {
@@ -529,12 +531,41 @@ function App() {
       const { data: merchant } = await supabase.from('merchants').select('*').eq('y_tunnus', detectedYTunnus).eq('user_id', user.id).single()
       if (merchant) { newContact = merchant.name; newCategory = merchant.default_category_code }
     }
+
+    // 2) Etsi asiakkaista (koko teksti normalisoituna, pisin osuma voittaa)
+    if (!newContact) {
+      const textNorm = normalizeName(text)
+      const customerCandidates = customers
+        .map(c => ({ name: c.name, norm: normalizeName(c.name) }))
+        .filter(c => c.norm.length >= 4 && textNorm.includes(c.norm))
+        .sort((a, b) => b.norm.length - a.norm.length)
+      if (customerCandidates.length > 0) newContact = customerCandidates[0].name
+    }
+
+    // 3) Etsi aiemmista tapahtumista (contact_name)
+    if (!newContact) {
+      const textNorm = normalizeName(text)
+      const uniqueNames = [...new Set(transactions.map(t => t.contact_name).filter(Boolean))]
+      const txCandidates = uniqueNames
+        .map(n => ({ name: n, norm: normalizeName(n) }))
+        .filter(n => n.norm.length >= 4 && textNorm.includes(n.norm))
+        .sort((a, b) => b.norm.length - a.norm.length)
+      if (txCandidates.length > 0) newContact = txCandidates[0].name
+    }
+
+    // 4) Fallback: ensimmäinen siisti rivi
     if (!newContact) {
       const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 2)
-      const blacklist = ['kuitti', 'tervetuloa', 'pvm', 'fax', 'tel', 'puh', 'käteiskuitti']
-      const cleanLines = lines.filter(l => !blacklist.some(b => l.toLowerCase().includes(b)))
+      const blacklist = ['kuitti', 'tervetuloa', 'pvm', 'pvm.', 'fax', 'tel', 'puh', 'käteiskuitti', 'y-tunnus', 'alv', 'yhteensä', 'summa']
+      const cleanLines = lines.filter(l => {
+        const lower = l.toLowerCase()
+        if (blacklist.some(b => lower.includes(b))) return false
+        if (/^[\d\s.,\-€%]+$/.test(l)) return false // pelkät numerot ja symbolit
+        return true
+      })
       newContact = cleanLines[0] || ''
     }
+
     const amountRegex = /\b\d{1,4}[.,]\d{2}\b/g
     const amounts = text.match(amountRegex)
     if (amounts) {
@@ -545,9 +576,31 @@ function App() {
     const dateRegex = /(\d{1,2})[\.\/\-](\d{1,2})[\.\/\-](\d{2,4})/g
     const dates = [...text.matchAll(dateRegex)]
     if (dates.length > 0) {
-      let [_, d, m, y] = dates[0]
-      if (y.length === 2) y = '20' + y
-      newDate = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+      const currentYear = new Date().getFullYear()
+      // Muodosta ehdokkaat ja tulkitse 2-numeroiset vuodet 1900/2000-luvuiksi
+      const candidates = dates
+        .map(m => {
+          let [, d, mo, y] = m
+          let year
+          if (y.length === 2) {
+            year = parseInt(y, 10) > 50 ? 1900 + parseInt(y, 10) : 2000 + parseInt(y, 10)
+          } else {
+            year = parseInt(y, 10)
+          }
+          return { d: parseInt(d, 10), mo: parseInt(mo, 10), y: year }
+        })
+        .filter(c => c.mo >= 1 && c.mo <= 12 && c.d >= 1 && c.d <= 31)
+        .filter(c => c.y >= 2000 && c.y <= currentYear + 1) // hylkää selvästi virheelliset
+      if (candidates.length > 0) {
+        // Valitse vuosi, joka on lähimpänä kuluvaa vuotta (tai edellistä)
+        candidates.sort((a, b) => {
+          const da = a.y <= currentYear ? currentYear - a.y : a.y - currentYear + 1000
+          const db = b.y <= currentYear ? currentYear - b.y : b.y - currentYear + 1000
+          return da - db
+        })
+        const best = candidates[0]
+        newDate = `${best.y}-${String(best.mo).padStart(2, '0')}-${String(best.d).padStart(2, '0')}`
+      }
     }
     let receiptUrl = null
     if (imageFile) {
@@ -573,6 +626,21 @@ function App() {
   const handleLedgerSubmit = async (e) => {
     e.preventDefault()
     if (!user) return
+
+    if (!formData.contact_name || !formData.contact_name.trim()) {
+      alert('Nimi puuttuu. Täytä se ennen tallennusta.')
+      return
+    }
+
+    // Varoita epäilyttävästä päivämäärästä ennen tallennusta
+    if (isDateSuspicious(formData.date_issued)) {
+      const year = new Date(formData.date_issued).getFullYear()
+      const proceed = window.confirm(
+        `Päivämäärän vuosi on ${year}, mikä poikkeaa kuluvasta vuodesta.\n\n` +
+        `Onko päivämäärä varmasti oikein? Väärä vuosi vaikeuttaa tositteen löytämistä myöhemmin.`
+      )
+      if (!proceed) return
+    }
 
     if (formData.type === 'income') {
       const expectedTax = INCOME_TAX_RATES[parseInt(formData.category_code)]
@@ -748,6 +816,16 @@ function App() {
     setCsvComparison(null)
     setCsvFileName('')
     setCsvError('')
+  }
+
+  // Tarkista, onko päivämäärä epäilyttävä (ei kuluva tai edellinen vuosi)
+  const isDateSuspicious = (dateStr) => {
+    if (!dateStr) return false
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return false
+    const currentYear = new Date().getFullYear()
+    const y = d.getFullYear()
+    return y < currentYear - 1 || y > currentYear
   }
 
   const handleStatusToggle = async (t) => {
@@ -1365,9 +1443,13 @@ function App() {
         <div className="modal-overlay" onClick={() => setShowTositeModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <h2>{editingId ? 'MUOKKAA TOSITETTA' : 'LISÄÄ UUSI TOSITE'}</h2>
-            {!editingId && formData.type === 'expense' && (
+            {!editingId && (
               <label className="scan-btn" style={{ gridColumn: '1 / -1' }}>
-                {isScanning ? 'Scanning...' : '📷 OTA KUVA KUITISTA'}
+                {isScanning
+                  ? 'Skannataan...'
+                  : formData.type === 'expense'
+                    ? '📷 OTA KUVA KUITISTA'
+                    : '📷 SKANNAA TOSITE'}
                 <input type="file" accept="image/*,application/pdf" capture="environment" onChange={handleFileUpload} ref={fileInputRef} disabled={isScanning}/>
               </label>
             )}
@@ -1375,7 +1457,22 @@ function App() {
               <div className="input-group"><label>TYYPPI</label><select name="type" value={formData.type} onChange={(e) => setFormData({...formData, type: e.target.value})} disabled={editingId}><option value="expense">MENOT</option><option value="income">TULOT</option></select></div>
               <div className="input-group"><label>KATEGORIA</label><select name="category_code" value={String(formData.category_code)} onChange={(e) => { const newCategory = e.target.value; const categoryNum = parseInt(newCategory, 10); const selectedCategory = categories.find(c => c.code === categoryNum); if (selectedCategory && selectedCategory.type === 'income') { const autoTax = INCOME_TAX_RATES[categoryNum] || 25.5; setFormData({ ...formData, category_code: newCategory, tax_rate: String(autoTax) }) } else { setFormData({ ...formData, category_code: newCategory }) } }} required>{categories.filter(c => c.type === formData.type).map(c => (<option key={c.code} value={c.code}>{c.code} - {c.name_fi}</option>))}</select></div>
               <div className="input-group"><label>NIMI</label><input type="text" name="contact_name" value={formData.contact_name} onChange={(e) => setFormData({...formData, contact_name: e.target.value})} required /></div>
-              <div className="input-group"><label>PÄIVÄMÄÄRÄ</label><input type="date" name="date_issued" value={formData.date_issued} onChange={(e) => setFormData({...formData, date_issued: e.target.value})} required /></div>
+              <div className="input-group">
+                <label>PÄIVÄMÄÄRÄ</label>
+                <input
+                  type="date"
+                  name="date_issued"
+                  value={formData.date_issued}
+                  onChange={(e) => setFormData({...formData, date_issued: e.target.value})}
+                  required
+                  style={isDateSuspicious(formData.date_issued) ? { borderColor: '#f59e0b', borderWidth: '2px' } : {}}
+                />
+                {isDateSuspicious(formData.date_issued) && (
+                  <span style={{ fontSize: '0.8rem', color: '#d97706', fontWeight: 600 }}>
+                    ⚠️ Tarkista päivämäärä — vuosi {new Date(formData.date_issued).getFullYear()} poikkeaa kuluvasta vuodesta.
+                  </span>
+                )}
+              </div>
               <div className="input-group"><label>YHTEENSÄ(€) (SIS. ALV)</label><input type="number" step="0.01" name="amount_gross" value={formData.amount_gross} onChange={(e) => setFormData({...formData, amount_gross: e.target.value})} required /></div>
               <div className="input-group"><label>ALV (%)</label><select name="tax_rate" value={formData.tax_rate} onChange={(e) => setFormData({...formData, tax_rate: e.target.value})}><option value="25.5">25.5%</option><option value="24">24%</option><option value="14">14%</option><option value="13.5">13.5%</option><option value="10">10%</option><option value="0">0%</option></select></div>
               <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '10px' }}><button type="submit" className="submit-btn" style={{ flex: 1, backgroundColor: editingId ? 'var(--primary-blue)' : '' }}>{editingId ? 'PÄIVITÄ' : 'TALLENNA'}</button>{editingId && <button type="button" onClick={() => { setShowTositeModal(false); cancelEdit() }} className="cancel-btn">PERUUTA</button>}</div>
