@@ -718,6 +718,12 @@ function App() {
     else fetchTransactions()
   }
 
+  // Avaa sovelluksen tapahtuma muokattavaksi CSV-vertailusta
+  // (sama kuin handleEditClick, mutta nimetty CSV-kontekstiin)
+  const handleCsvEditTx = (tx) => {
+    handleEditClick(tx)
+  }
+
   // Luo uusi tosite CSV-rivistä (avataan tosite-modaali esitäytetyillä tiedoilla)
   const handleCsvCreateTx = (row) => {
     const isExpense = row.amount < 0
@@ -1011,7 +1017,6 @@ function App() {
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <h3 style={{ margin: 0 }}>TAPAHTUMAT</h3>
                 <select value={ledgerMonthFilter} onChange={(e) => setLedgerMonthFilter(e.target.value)} style={{ width: 'auto', padding: '8px 12px' }}>
                   <option value="all">Kaikki</option>
                   {(() => { const options = []; const now = new Date(); for (let i = 0; i < 12; i++) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; const label = d.toLocaleDateString('fi-FI', { month: 'long', year: 'numeric' }); options.push({ value, label }) } return options.map(opt => (<option key={opt.value} value={opt.value}>{opt.label}</option>)) })()}
@@ -1050,6 +1055,7 @@ function App() {
 
         {activeTab === 'reports' && (
           <div>
+            <h2>VERO</h2>
             <div className="report-controls" style={{ flexWrap: 'wrap' }}>
               <div className="input-group"><label>Vuosi</label><select value={reportYear} onChange={(e) => setReportYear(e.target.value)}>{availableYears.map(year => (<option key={year} value={year}>{year}</option>))}</select></div>
               <div className="input-group"><label>Aikaväli</label><select value={reportPeriodType} onChange={(e) => setReportPeriodType(e.target.value)}><option value="year">Koko vuosi</option><option value="quarter">Neljännesvuosi</option><option value="month">Kuukausi</option></select></div>
@@ -1238,10 +1244,36 @@ function App() {
                                   </>
                                 )}
                                 {r.type === 'amount_mismatch' && (
-                                  <p>Sama päivä ja nimi, mutta summa eroaa. Tarkista tosite.</p>
+                                  <>
+                                    <p>Sama päivä ja nimi, mutta summa eroaa. Tarkista tosite.</p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                      Pankki: <strong>{Math.abs(r.csv.amount).toFixed(2)} €</strong>
+                                      {' · '}
+                                      Sovellus: <strong>{r.tx.amount_gross} €</strong>
+                                    </p>
+                                    <button
+                                      className="csv-action-btn"
+                                      onClick={() => handleCsvEditTx(r.tx)}
+                                    >
+                                      Muokkaa tositetta
+                                    </button>
+                                  </>
                                 )}
                                 {r.type === 'partial' && (
-                                  <p>Vain summa täsmää — varmista, että kyseessä on sama tapahtuma.</p>
+                                  <>
+                                    <p>Vain summa täsmää — varmista, että kyseessä on sama tapahtuma.</p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                      Pankki: <strong>{r.csv.name || '—'}</strong> {r.csv.date}
+                                      <br />
+                                      Sovellus: <strong>{r.tx.contact_name}</strong> {r.tx.date_issued}
+                                    </p>
+                                    <button
+                                      className="csv-action-btn"
+                                      onClick={() => handleCsvEditTx(r.tx)}
+                                    >
+                                      Muokkaa tositetta
+                                    </button>
+                                  </>
                                 )}
                                 {r.type === 'missing' && (
                                   <>
