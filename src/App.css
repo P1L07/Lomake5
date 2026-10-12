@@ -151,15 +151,17 @@ textarea { resize: vertical; }
 .transactions-table th:nth-child(3),
 .transactions-table td:nth-child(3) { width: 120px; } /* Name */
 .transactions-table th:nth-child(4),
-.transactions-table td:nth-child(4) { width: 90px; }  /* Gross */
+.transactions-table td:nth-child(4) { width: 100px; } /* Lasku */
 .transactions-table th:nth-child(5),
-.transactions-table td:nth-child(5) { width: 60px; }  /* VAT% */
+.transactions-table td:nth-child(5) { width: 90px; }  /* Brutto */
 .transactions-table th:nth-child(6),
-.transactions-table td:nth-child(6) { width: 80px; }  /* Net */
+.transactions-table td:nth-child(6) { width: 60px; }  /* ALV% */
 .transactions-table th:nth-child(7),
-.transactions-table td:nth-child(7) { width: 90px; }  /* Status */
+.transactions-table td:nth-child(7) { width: 80px; }  /* Netto */
 .transactions-table th:nth-child(8),
-.transactions-table td:nth-child(8) { width: 180px; } /* Actions */
+.transactions-table td:nth-child(8) { width: 90px; }  /* Tila */
+.transactions-table th:nth-child(9),
+.transactions-table td:nth-child(9) { width: 180px; } /* Toiminnot */
 
 /* Badges */
 .badge {

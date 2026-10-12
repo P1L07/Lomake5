@@ -273,6 +273,223 @@ function generoiViitenumero(laskunNumero) {
   return pohja + tarkiste;
 }
 
+// Kuukausien nimet kuvaajaa varten
+const MONTH_LABELS = ['Tammi', 'Helmi', 'Maalis', 'Huhti', 'Touko', 'Kesä', 'Heinä', 'Elo', 'Syys', 'Loka', 'Marras', 'Joulu']
+
+// Vero-välilehden kuvaaja: näyttää tulot, menot ja suurimmat kulut valitulla aikavälillä
+function VeroVisuals({ transactions, categories, reportYear, effectivePeriod }) {
+  const data = useMemo(() => {
+    const year = parseInt(reportYear)
+    let monthNums = []
+    if (effectivePeriod === 'all') {
+      monthNums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    } else if (effectivePeriod.startsWith('Q')) {
+      const q = parseInt(effectivePeriod[1])
+      const start = (q - 1) * 3 + 1
+      monthNums = [start, start + 1, start + 2]
+    } else {
+      monthNums = [parseInt(effectivePeriod)]
+    }
+
+    const monthlyData = monthNums.map(m => ({
+      num: m,
+      label: MONTH_LABELS[m - 1],
+      income: 0,
+      expense: 0,
+    }))
+
+    const expenseByCategory = {}
+
+    transactions.forEach(t => {
+      const dateStr = (t.status === 'paid' && t.date_paid) ? t.date_paid : t.date_issued
+      if (!dateStr) return
+      const d = new Date(dateStr)
+      if (isNaN(d.getTime())) return
+      if (d.getFullYear() !== year) return
+      const m = d.getMonth() + 1
+      const idx = monthNums.indexOf(m)
+      if (idx < 0) return
+
+      const net = parseFloat(t.amount_net) || 0
+      if (t.type === 'income' && t.status === 'paid') {
+        monthlyData[idx].income += net
+      } else if (t.type === 'expense') {
+        monthlyData[idx].expense += net
+        const code = t.category_code
+        if (!expenseByCategory[code]) expenseByCategory[code] = 0
+        expenseByCategory[code] += net
+      }
+    })
+
+    const topExpenses = Object.entries(expenseByCategory)
+      .map(([code, amount]) => {
+        const cat = categories.find(c => c.code === parseInt(code))
+        return { code: parseInt(code), name: cat?.name_fi || `Kulu ${code}`, amount }
+      })
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 6)
+
+    const maxValue = Math.max(1, ...monthlyData.map(m => Math.max(m.income, m.expense)))
+    const totalIncome = monthlyData.reduce((s, m) => s + m.income, 0)
+    const totalExpense = monthlyData.reduce((s, m) => s + m.expense, 0)
+    const totalProfit = totalIncome - totalExpense
+    const maxExpense = topExpenses[0]?.amount || 1
+
+    return { months: monthlyData, topExpenses, maxValue, totalIncome, totalExpense, totalProfit, maxExpense }
+  }, [transactions, categories, reportYear, effectivePeriod])
+
+  const hasData = data.totalIncome > 0 || data.totalExpense > 0
+  if (!hasData) {
+    return (
+      <div className="report-card" style={{ marginBottom: '20px' }}>
+        <h3>Taloudellinen tilanne</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          Ei tapahtumia valitulla aikavälillä.
+        </p>
+      </div>
+    )
+  }
+
+  const total = data.totalIncome + data.totalExpense
+  const incomePct = total > 0 ? (data.totalIncome / total) * 100 : 0
+  const expensePct = total > 0 ? (data.totalExpense / total) * 100 : 0
+  const profitMargin = data.totalIncome > 0 ? (data.totalProfit / data.totalIncome) * 100 : 0
+
+  return (
+    <div style={{ display: 'grid', gap: '20px', marginBottom: '20px' }}>
+      {/* Yhteenveto: tulot vs menot */}
+      <div className="report-card">
+        <h3>Taloudellinen tilanne</h3>
+        <div style={{ display: 'flex', gap: '24px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: '140px' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Tulot</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--success)' }}>{data.totalIncome.toFixed(2)} €</div>
+          </div>
+          <div style={{ flex: 1, minWidth: '140px' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Menot</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--danger)' }}>{data.totalExpense.toFixed(2)} €</div>
+          </div>
+          <div style={{ flex: 1, minWidth: '140px' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Tulos</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: data.totalProfit >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+              {data.totalProfit.toFixed(2)} €
+            </div>
+            {data.totalIncome > 0 && (
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {profitMargin >= 0 ? '+' : ''}{profitMargin.toFixed(1)}% liikevaihdosta
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Yhteenvetopalkki */}
+        <div style={{ display: 'flex', height: '14px', borderRadius: '7px', overflow: 'hidden', backgroundColor: 'var(--bg-main)' }}>
+          <div style={{ width: `${incomePct}%`, backgroundColor: 'var(--success)', transition: 'width 0.3s' }} title={`Tulot ${data.totalIncome.toFixed(2)} €`}></div>
+          <div style={{ width: `${expensePct}%`, backgroundColor: 'var(--danger)', transition: 'width 0.3s' }} title={`Menot ${data.totalExpense.toFixed(2)} €`}></div>
+        </div>
+
+        {data.totalProfit < 0 && (
+          <p style={{ marginTop: '12px', fontSize: '0.9rem', color: 'var(--danger)', fontWeight: 600, margin: '12px 0 0 0' }}>
+            ⚠️ Menot ylittävät tulot {Math.abs(data.totalProfit).toFixed(2)} €:lla tällä aikavälillä.
+          </p>
+        )}
+        {data.totalProfit > 0 && (
+          <p style={{ marginTop: '12px', fontSize: '0.9rem', color: 'var(--success)', fontWeight: 600, margin: '12px 0 0 0' }}>
+            ✓ Voitollinen aikaväli — tulos {data.totalProfit.toFixed(2)} €.
+          </p>
+        )}
+      </div>
+
+      {/* Kuukausittainen palkkikuvaaja */}
+      <div className="report-card">
+        <h3>Kuukausittainen kehitys</h3>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '12px', height: '220px', paddingTop: '20px', borderBottom: '1px solid var(--border-color)' }}>
+          {data.months.map((m, i) => (
+            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: '2px', alignItems: 'flex-end', width: '100%', height: '100%', justifyContent: 'center' }}>
+                <div
+                  style={{
+                    width: '45%',
+                    maxWidth: '24px',
+                    height: `${(m.income / data.maxValue) * 100}%`,
+                    minHeight: m.income > 0 ? '2px' : '0',
+                    backgroundColor: 'var(--success)',
+                    borderRadius: '3px 3px 0 0',
+                    transition: 'height 0.3s'
+                  }}
+                  title={`${m.label}: Tulot ${m.income.toFixed(2)} €`}
+                ></div>
+                <div
+                  style={{
+                    width: '45%',
+                    maxWidth: '24px',
+                    height: `${(m.expense / data.maxValue) * 100}%`,
+                    minHeight: m.expense > 0 ? '2px' : '0',
+                    backgroundColor: 'var(--danger)',
+                    borderRadius: '3px 3px 0 0',
+                    transition: 'height 0.3s'
+                  }}
+                  title={`${m.label}: Menot ${m.expense.toFixed(2)} €`}
+                ></div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+          {data.months.map((m, i) => (
+            <div key={i} style={{ flex: 1, textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              {m.label.substring(0, 3)}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: '16px', marginTop: '16px', fontSize: '0.85rem' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ display: 'inline-block', width: '12px', height: '12px', backgroundColor: 'var(--success)', borderRadius: '2px' }}></span>
+            Tulot
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ display: 'inline-block', width: '12px', height: '12px', backgroundColor: 'var(--danger)', borderRadius: '2px' }}></span>
+            Menot
+          </span>
+        </div>
+      </div>
+
+      {/* Suurimmat kuluerät */}
+      {data.topExpenses.length > 0 && (
+        <div className="report-card">
+          <h3>Suurimmat kuluerät</h3>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+            Mihin raha on mennyt tällä aikavälillä.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {data.topExpenses.map((e, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) 2fr auto', gap: '12px', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.name}>
+                  {e.code} – {e.name}
+                </span>
+                <div style={{ height: '10px', backgroundColor: 'var(--bg-main)', borderRadius: '5px', overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      width: `${(e.amount / data.maxExpense) * 100}%`,
+                      height: '100%',
+                      backgroundColor: 'var(--danger)',
+                      borderRadius: '5px',
+                      transition: 'width 0.3s'
+                    }}
+                  ></div>
+                </div>
+                <span style={{ fontSize: '0.85rem', fontFamily: 'monospace', fontWeight: 600, textAlign: 'right', minWidth: '80px' }}>
+                  {e.amount.toFixed(2)} €
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function App() {
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
@@ -861,12 +1078,56 @@ function App() {
 
   const handleStatusToggle = async (t) => {
     if (t.type === 'expense') { alert('Kuitit merkataan aina maksetuksi'); return }
+
     if (t.status === 'unpaid') {
+      // Etsi kaikki saman laskun rivit (sama viitenumero + asiakas + päivä)
+      const sameInvoice = t.reference_number
+        ? transactions.filter(x =>
+            x.type === 'income' &&
+            x.reference_number === t.reference_number &&
+            x.contact_name === t.contact_name
+          )
+        : [t]
+
       const today = new Date().toISOString().split('T')[0]
-      const paymentDate = window.prompt("Syötä maksupäivä (YYYY-MM-DD):", today)
-      if (paymentDate) { await supabase.from('transactions').update({ status: 'paid', date_paid: paymentDate }).eq('id', t.id); fetchTransactions() }
+      const paymentDate = window.prompt(
+        sameInvoice.length > 1
+          ? `Syötä maksupäivä laskulle ${t.reference_number} (${sameInvoice.length} riviä, yhteensä ${sameInvoice.reduce((s, x) => s + parseFloat(x.amount_gross), 0).toFixed(2)} €):`
+          : "Syötä maksupäivä (YYYY-MM-DD):",
+        today
+      )
+      if (!paymentDate) return
+
+      const ids = sameInvoice.map(x => x.id)
+      const { error } = await supabase
+        .from('transactions')
+        .update({ status: 'paid', date_paid: paymentDate })
+        .in('id', ids)
+      if (error) alert('Virhe: ' + error.message)
+      else fetchTransactions()
     } else {
-      if (window.confirm("Merkitäänkö maksamattomaksi?")) { await supabase.from('transactions').update({ status: 'unpaid', date_paid: null }).eq('id', t.id); fetchTransactions() }
+      // Merkitse maksamattomaksi – sama logiikka
+      const sameInvoice = t.reference_number
+        ? transactions.filter(x =>
+            x.type === 'income' &&
+            x.reference_number === t.reference_number &&
+            x.contact_name === t.contact_name
+          )
+        : [t]
+
+      if (window.confirm(
+        sameInvoice.length > 1
+          ? `Merkitäänkö koko lasku ${t.reference_number} (${sameInvoice.length} riviä) maksamattomaksi?`
+          : "Merkitäänkö maksamattomaksi?"
+      )) {
+        const ids = sameInvoice.map(x => x.id)
+        const { error } = await supabase
+          .from('transactions')
+          .update({ status: 'unpaid', date_paid: null })
+          .in('id', ids)
+        if (error) alert('Virhe: ' + error.message)
+        else fetchTransactions()
+      }
     }
   }
 
@@ -1119,6 +1380,19 @@ function App() {
     return { vatToPay: totalVatCollected - totalVatPaid, totalVatCollected, totalVatPaid, totalIncomeNet, totalExpenseNet, profit: totalIncomeNet - totalExpenseNet, alvSalesTax, zeroTaxSalesNet, expensesByCategory, euSalesGoods, euSalesServices, euPurchasesGoods, euPurchasesServices, importGoods, reverseChargeSales, reverseChargePurchases }
   }, [transactions, reportYear, effectivePeriod])
 
+  // Etsi laskut, joissa osa riveistä on maksettu ja osa ei
+  const partiallyPaidInvoices = useMemo(() => {
+    const groups = {}
+    transactions.forEach(t => {
+      if (t.type !== 'income' || !t.reference_number) return
+      const key = `${t.reference_number}_${t.contact_name}`
+      if (!groups[key]) groups[key] = { ref: t.reference_number, customer: t.contact_name, paid: [], unpaid: [] }
+      if (t.status === 'paid') groups[key].paid.push(t)
+      else groups[key].unpaid.push(t)
+    })
+    return Object.values(groups).filter(g => g.paid.length > 0 && g.unpaid.length > 0)
+  }, [transactions])
+
   // Vertailu päivittyy automaattisesti, kun tapahtumat tai CSV-rivit muuttuvat
   useEffect(() => {
     if (csvRows.length > 0) {
@@ -1204,13 +1478,30 @@ function App() {
               </div>
               <div className="table-container">
                 <table className="transactions-table">
-                  <thead><tr><th>PÄIVÄMÄÄRÄ</th><th>TYYPPI</th><th>ASIAKAS</th><th>BRUTTO</th><th>ALV %</th><th>NETTO</th><th>TILANNE</th><th>TOIMINNAT</th></tr></thead>
+                  <thead><tr><th>PÄIVÄMÄÄRÄ</th><th>TYYPPI</th><th>ASIAKAS</th><th>LASKU</th><th>BRUTTO</th><th>ALV %</th><th>NETTO</th><th>TILANNE</th><th>TOIMINNAT</th></tr></thead>
                   <tbody>
                     {filteredTransactions.map((t) => (
                       <tr key={t.id}>
                         <td>{new Date(t.date_issued).toLocaleDateString('fi-FI')}</td>
                         <td><span className={`badge ${t.type}`}>{t.type}</span></td>
                         <td title={t.contact_name}>{t.contact_name}</td>
+                        <td>
+                          {t.reference_number ? (
+                            <span
+                              title={`Viitenumero ${t.reference_number}`}
+                              style={{
+                                fontFamily: 'monospace',
+                                fontSize: '0.8rem',
+                                color: 'var(--text-muted)',
+                                padding: '2px 6px',
+                                backgroundColor: 'var(--bg-main)',
+                                borderRadius: '4px'
+                              }}
+                            >
+                              #{t.reference_number}
+                            </span>
+                          ) : '—'}
+                        </td>
                         <td style={{ fontWeight: '600' }}>{t.amount_gross}</td>
                         <td>{t.tax_rate}%</td>
                         <td>{t.amount_net}</td>
@@ -1235,13 +1526,72 @@ function App() {
 
         {activeTab === 'reports' && (
           <div>
-            <h2>VERO</h2>
             <div className="report-controls" style={{ flexWrap: 'wrap' }}>
-              <div className="input-group"><label>Vuosi</label><select value={reportYear} onChange={(e) => setReportYear(e.target.value)}>{availableYears.map(year => (<option key={year} value={year}>{year}</option>))}</select></div>
-              <div className="input-group"><label>Aikaväli</label><select value={reportPeriodType} onChange={(e) => setReportPeriodType(e.target.value)}><option value="year">Koko vuosi</option><option value="quarter">Neljännesvuosi</option><option value="month">Kuukausi</option></select></div>
-              {reportPeriodType === 'quarter' && (<div className="input-group"><label>Kvarttaali</label><select value={selectedQuarter} onChange={(e) => setSelectedQuarter(e.target.value)}><option value="Q1">Q1 (Tammi-Maalis)</option><option value="Q2">Q2 (Huhti-Kesä)</option><option value="Q3">Q3 (Heinä-Syys)</option><option value="Q4">Q4 (Loka-Joulu)</option></select></div>)}
-              {reportPeriodType === 'month' && (<div className="input-group"><label>Kuukausi</label><select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}><option value="01">Tammikuu</option><option value="02">Helmikuu</option><option value="03">Maaliskuu</option><option value="04">Huhtikuu</option><option value="05">Toukokuu</option><option value="06">Kesäkuu</option><option value="07">Heinäkuu</option><option value="08">Elokuu</option><option value="09">Syyskuu</option><option value="10">Lokakuu</option><option value="11">Marraskuu</option><option value="12">Joulukuu</option></select></div>)}
+              <div className="input-group"><label>Vuosi</label>
+                <select value={reportYear} onChange={(e) => setReportYear(e.target.value)}>
+                  {availableYears.map(year => (<option key={year} value={year}>{year}</option>))}
+                </select>
+              </div>
+              <div className="input-group"><label>Aikaväli</label>
+                <select value={reportPeriodType} onChange={(e) => setReportPeriodType(e.target.value)}>
+                  <option value="year">Koko vuosi</option>
+                  <option value="quarter">Neljännesvuosi</option>
+                  <option value="month">Kuukausi</option>
+                </select>
+              </div>
+              {reportPeriodType === 'quarter' && (
+                <div className="input-group"><label>Kvarttaali</label>
+                  <select value={selectedQuarter} onChange={(e) => setSelectedQuarter(e.target.value)}>
+                    <option value="Q1">Q1 (Tammi-Maalis)</option>
+                    <option value="Q2">Q2 (Huhti-Kesä)</option>
+                    <option value="Q3">Q3 (Heinä-Syys)</option>
+                    <option value="Q4">Q4 (Loka-Joulu)</option>
+                  </select>
+                </div>
+              )}
+              {reportPeriodType === 'month' && (
+                <div className="input-group"><label>Kuukausi</label>
+                  <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}>
+                    {/* kuukaudet */}
+                  </select>
+                </div>
+              )}
             </div>
+
+            {/* VAROITUS OSITTAIN MAKSETTU*/}
+            {partiallyPaidInvoices.length > 0 && (
+              <div style={{
+                padding: '12px 16px',
+                backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                borderLeft: '4px solid #f59e0b',
+                borderRadius: '6px',
+                marginBottom: '20px'
+              }}>
+                <strong>⚠️ Huomio:</strong> {partiallyPaidInvoices.length} lasku(a) on osittain maksettu – osa ALV-ryhmistä on merkitty maksetuksi, osa ei. Tämä vääristää raporttia.
+                <ul style={{ marginTop: '8px', marginBottom: 0, paddingLeft: '20px', fontSize: '0.9rem' }}>
+                  {partiallyPaidInvoices.map((g, i) => (
+                    <li key={i}>
+                      Lasku #{g.ref} ({g.customer}) – {g.unpaid.length} rivi(ä) merkitsemättä
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Taloudellinen kuvaaja */}
+                <VeroVisuals
+                  transactions={transactions}
+                  categories={categories}
+                  reportYear={reportYear}
+                  effectivePeriod={effectivePeriod}
+                />
+
+                <div className="report-grid">
+                  {/* raporttikortit (ennallaan) */}
+                </div>
+              </div>
+            )}
+
             <div className="report-grid">
               <div className="report-card"><h3>Kotimaan myynnit</h3><table className="report-table"><tbody>{Object.entries(reportData.alvSalesTax).filter(([, amount]) => amount > 0).sort((a, b) => parseFloat(b[0]) - parseFloat(a[0])).map(([rate, amount]) => (<tr key={rate}><th>{rate} % vero</th><td className="money">{amount.toFixed(2)} €</td></tr>))}</tbody></table></div>
               <div className="report-card"><h3>Vähennettävä vero</h3><table className="report-table"><tbody><tr><th>Verokauden vähennettävä vero</th><td className="money">{reportData.totalVatPaid.toFixed(2)} €</td></tr></tbody></table></div>
