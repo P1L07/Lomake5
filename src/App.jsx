@@ -38,7 +38,8 @@ const DEFAULT_INVOICE_DATA = {
   invoice_number: '1',
   reference_number: '',
   project_details: '',
-  lines: [{ ...DEFAULT_INVOICE_LINE }],   // <- uusi
+  expense_reference: '',   // <- uusi
+  lines: [{ ...DEFAULT_INVOICE_LINE }],
   date_issued: new Date().toISOString().split('T')[0],
   income_category: '3001',
   selectedCustomerId: '',
@@ -602,6 +603,7 @@ function App() {
     tax_rate: 25.5,
     y_tunnus: '',
     receipt_url: null,
+    expense_reference: '',   // <- uusi
   })
   const [ledgerMonthFilter, setLedgerMonthFilter] = useState(() => {
     const now = new Date()
@@ -960,13 +962,18 @@ function App() {
     }
 
     const payload = {
-      user_id: user.id, type: formData.type, category_code: parseInt(formData.category_code),
-      contact_name: formData.contact_name, date_issued: formData.date_issued,
-      amount_gross: gross, tax_rate: parseFloat(formData.tax_rate),
+      user_id: user.id,
+      type: formData.type,
+      category_code: parseInt(formData.category_code),
+      contact_name: formData.contact_name,
+      date_issued: formData.date_issued,
+      amount_gross: gross,
+      tax_rate: parseFloat(formData.tax_rate),
       amount_net: parseFloat(net.toFixed(2)),
       status: isExpense ? 'paid' : 'unpaid',
       date_paid: isExpense ? formData.date_issued : null,
-      receipt_image_url: formData.receipt_url || null
+      receipt_image_url: formData.receipt_url || null,
+      expense_reference: formData.expense_reference?.trim() || null,   // <- uusi
     }
 
     let dbError
@@ -996,12 +1003,12 @@ function App() {
 
   const cancelEdit = () => {
     setEditingId(null)
-    setFormData({ type: 'expense', category_code: 346, contact_name: '', date_issued: new Date().toISOString().split('T')[0], amount_gross: '', tax_rate: settings.default_tax_rate || 25.5, y_tunnus: '', receipt_url: null })
+    setFormData({ type: 'expense', category_code: 346, contact_name: '', date_issued: new Date().toISOString().split('T')[0], amount_gross: '', tax_rate: settings.default_tax_rate || 25.5, y_tunnus: '', receipt_url: null, expense_reference: '' })
   }
 
   const handleEditClick = (t) => {
     setEditingId(t.id)
-    setFormData({ type: t.type, category_code: t.category_code, contact_name: t.contact_name, date_issued: t.date_issued, amount_gross: t.amount_gross, tax_rate: String(t.tax_rate), y_tunnus: '', receipt_url: t.receipt_image_url })
+    setFormData({ type: t.type, category_code: t.category_code, contact_name: t.contact_name, date_issued: t.date_issued, amount_gross: t.amount_gross, tax_rate: String(t.tax_rate), y_tunnus: '', receipt_url: t.receipt_image_url, expense_reference: t.expense_reference || '' })
     setShowTositeModal(true)
   }
 
@@ -1256,6 +1263,12 @@ function App() {
       doc.setFont(undefined, 'normal')
       doc.text(invoiceData.project_details || '', 14, finalY + 16)
 
+      if (invoiceData.expense_reference?.trim()) {
+        doc.setFontSize(9); doc.setTextColor(80, 80, 80)
+        doc.text(`Kuluviite: ${invoiceData.expense_reference}`, 14, finalY + 22)
+        doc.setTextColor(0, 0, 0)
+      }
+
       // ALV-erittely + loppusumma
       const totalsBody = [
         ['Yhteensä (alv 0%)', netTotal.toFixed(2) + '€'],
@@ -1312,7 +1325,8 @@ function App() {
           status: 'unpaid',
           description,
           invoice_pdf_url: pdfUrl,
-          reference_number: generatedReference
+          reference_number: generatedReference,
+          expense_reference: invoiceData.expense_reference?.trim() || null,   // <- uusi
         }
       })
 
@@ -1584,7 +1598,7 @@ function App() {
               </div>
               <div className="table-container">
                 <table className="transactions-table">
-                  <thead><tr><th>PÄIVÄMÄÄRÄ</th><th>TYYPPI</th><th>ASIAKAS</th><th>LASKU</th><th>BRUTTO</th><th>ALV %</th><th>NETTO</th><th>TILANNE</th><th>TOIMINNAT</th></tr></thead>
+                  <thead><tr><th>PÄIVÄMÄÄRÄ</th><th>TYYPPI</th><th>ASIAKAS</th><th>VIITE</th><th>BRUTTO</th><th>ALV %</th><th>NETTO</th><th>TILANNE</th><th>TOIMINNAT</th></tr></thead>
                   <tbody>
                     {filteredTransactions.map((t) => (
                       <tr key={t.id}>
@@ -1872,6 +1886,109 @@ function App() {
                 <input type="text" name="project_details" value={invoiceData.project_details} onChange={handleInvoiceChange} />
               </div>
 
+              <div className="input-group" style={{ gridColumn: '1 / -1' }}>
+                <label>KULUJEN VIITE (valinnainen)</label>
+                <input
+                  type="text"
+                  name="expense_reference"
+                  placeholder="Sama viite kuin kuluilla, jotka liittyvät tähän laskuun"
+                  value={invoiceData.expense_reference || ''}
+                  onChange={handleInvoiceChange}
+                  list="invoice-expense-references"
+                />
+                <datalist id="invoice-expense-references">
+                  {[...new Set(
+                    transactions
+                      .filter(t => t.type === 'expense' && t.expense_reference)
+                      .map(t => t.expense_reference)
+                  )].map(ref => (
+                    <option key={ref} value={ref} />
+                  ))}
+                </datalist>
+              </div>
+              {invoiceData.expense_reference?.trim() && (() => {
+                const matchedExpenses = transactions.filter(t =>
+                  t.type === 'expense' &&
+                  t.expense_reference &&
+                  t.expense_reference.trim().toLowerCase() === invoiceData.expense_reference.trim().toLowerCase()
+                )
+                if (matchedExpenses.length === 0) return null
+
+                const totalNet = matchedExpenses.reduce((s, t) => s + (parseFloat(t.amount_net) || 0), 0)
+                const totalGross = matchedExpenses.reduce((s, t) => s + (parseFloat(t.amount_gross) || 0), 0)
+
+                return (
+                  <div style={{
+                    gridColumn: '1 / -1',
+                    padding: '16px',
+                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
+                    borderLeft: '4px solid #6366f1',
+                    borderRadius: '8px',
+                    marginTop: '8px'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
+                      <strong style={{ fontSize: '0.95rem' }}>
+                        Viitteellä "{invoiceData.expense_reference}" löytyi {matchedExpenses.length} kulua
+                      </strong>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        {totalNet.toFixed(2)} € (alv 0) · {totalGross.toFixed(2)} € (sis. alv)
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {matchedExpenses.map(exp => (
+                        <div key={exp.id} style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1fr auto auto',
+                          gap: '12px',
+                          alignItems: 'center',
+                          padding: '8px 12px',
+                          backgroundColor: 'var(--bg-surface)',
+                          borderRadius: '6px',
+                          fontSize: '0.85rem'
+                        }}>
+                          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <div style={{ fontWeight: 600 }}>{exp.contact_name}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              {exp.date_issued?.split('-').reverse().join('.')} · {exp.amount_gross} € · ALV {exp.tax_rate}%
+                            </div>
+                          </div>
+                          <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {exp.amount_net} €
+                          </span>
+                          <button
+                            type="button"
+                            className="csv-action-btn"
+                            onClick={() => {
+                              // Lisää kulu laskuriviksi (á-hinta = kulun netto)
+                              setInvoiceData(prev => ({
+                                ...prev,
+                                lines: [
+                                  ...prev.lines,
+                                  {
+                                    description: `${exp.contact_name} (${exp.date_issued})`,
+                                    quantity: '1',
+                                    unit_price: exp.amount_net?.toString() || '0',
+                                    tax_rate: String(exp.tax_rate || 25.5)
+                                  }
+                                ]
+                              }))
+                            }}
+                            title="Lisää tämä kulu laskuriviksi"
+                          >
+                            + Lisää laskuriviksi
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '12px', marginBottom: 0 }}>
+                      Vinkki: voit lisätä kulut laskuriveiksi yksi kerrallaan, tai jättää ne pelkäksi viitteeksi.
+                      Tieto viitteestä tallennetaan myös laskuun.
+                    </p>
+                  </div>
+                )
+              })()}
               <button
                 type="submit"
                 className="submit-btn"
@@ -2193,6 +2310,31 @@ function App() {
                   </span>
                 )}
               </div>
+              {formData.type === 'expense' && (
+                <div className="input-group" style={{ gridColumn: '1 / -1' }}>
+                  <label>VIITE (valinnainen)</label>
+                  <input
+                    type="text"
+                    name="expense_reference"
+                    placeholder="Esim. asiakkaan nimi, projektikoodi tai laskunumero"
+                    value={formData.expense_reference || ''}
+                    onChange={(e) => setFormData({ ...formData, expense_reference: e.target.value })}
+                    list="expense-reference-suggestions"
+                  />
+                  <datalist id="expense-reference-suggestions">
+                    {[...new Set(
+                      transactions
+                        .filter(t => t.type === 'expense' && t.expense_reference)
+                        .map(t => t.expense_reference)
+                    )].map(ref => (
+                      <option key={ref} value={ref} />
+                    ))}
+                  </datalist>
+                  <small style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                    Käytä samaa viitettä laskulla, niin kulut yhdistetään automaattisesti.
+                  </small>
+                </div>
+              )}
               <div className="input-group"><label>YHTEENSÄ(€) (SIS. ALV)</label><input type="number" step="0.01" name="amount_gross" value={formData.amount_gross} onChange={(e) => setFormData({...formData, amount_gross: e.target.value})} required /></div>
               <div className="input-group"><label>ALV (%)</label><select name="tax_rate" value={formData.tax_rate} onChange={(e) => setFormData({...formData, tax_rate: e.target.value})}><option value="25.5">25.5%</option><option value="24">24%</option><option value="14">14%</option><option value="13.5">13.5%</option><option value="10">10%</option><option value="0">0%</option></select></div>
               <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '10px' }}><button type="submit" className="submit-btn" style={{ flex: 1, backgroundColor: editingId ? 'var(--primary-blue)' : '' }}>{editingId ? 'PÄIVITÄ' : 'TALLENNA'}</button>{editingId && <button type="button" onClick={() => { setShowTositeModal(false); cancelEdit() }} className="cancel-btn">PERUUTA</button>}</div>
