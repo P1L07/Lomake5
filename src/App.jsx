@@ -552,6 +552,7 @@ function App() {
   const [isSettingsSaving, setIsSettingsSaving] = useState(false)
   const [invoiceData, setInvoiceData] = useState(DEFAULT_INVOICE_DATA)
   const [showCustomerModal, setShowCustomerModal] = useState(false)
+  const [editingCustomer, setEditingCustomer] = useState(null)
   const [isInvoiceLoading, setIsInvoiceLoading] = useState(false)
   const [lastInvoiceUrl, setLastInvoiceUrl] = useState('')
   const [lastInvoiceNumber, setLastInvoiceNumber] = useState('')
@@ -1915,7 +1916,7 @@ function App() {
               </div>
 
               <div className="input-group" style={{ gridColumn: '1 / -1' }}>
-                <label>HANKKEEN LISÄTIEDOT</label>
+                <label>HANKKEEN LISÄTIEDOT (valinnainen)</label>
                 <input type="text" name="project_details" value={invoiceData.project_details} onChange={handleInvoiceChange} />
               </div>
 
